@@ -1,0 +1,442 @@
+[
+  {
+    "area": "string-interpolation-and-quoting",
+    "ruby": "greeting = \"hello #{name} welcome\"    # name is NULL at runtime",
+    "wrong_output": "greeting := 'hello ' || (name)::text || ' welcome';",
+    "why_wrong": "In Ruby nil interpolates as the empty string, so the value is \"hello  welcome\". In SQL, ANY operand of || that is NULL makes the whole expression NULL, so greeting becomes NULL \u2014 the entire string silently vanishes. This is a divergence-producing silent-wrong-result, and it also breaks the dynamic execute() path (execute(\"... #{x}\") builds a NULL SQL string and EXECUTE NULL raises), and the fetch/perform interpolation-into-value paths.",
+    "corrected_rule": "Each interpolated slot in the || path must match Ruby's nil->\"\" by emitting COALESCE((e)::text, '') rather than (e)::text. (RAISE's %-placeholder path already tolerates NULL by printing <NULL>, which is a second, inconsistent divergence worth documenting.)",
+    "severity": "high"
+  },
+  {
+    "area": "string-interpolation-and-quoting",
+    "ruby": "report = \"line1\\nline2\\tcol\"",
+    "wrong_output": "report := 'line1\\nline2\\tcol';",
+    "why_wrong": "The rule lists double-quoted escapes (\\n \\t ...) as recognized by the lexer but never says the literal chunk is re-encoded for plpgsql. With standard_conforming_strings=on (the default), '...\\n...' is a literal backslash-n, NOT a newline. So Ruby's newline/tab become backslash-letter sequences \u2014 wrong value with no error. The heredoc example correctly used E'\\n', proving E-strings are needed, but that treatment is missing from the general double-quoted rule.",
+    "corrected_rule": "Decode Ruby double-quoted escapes to their actual bytes, then emit the literal chunk as an escape-string E'...' (re-escaping the control chars) or embed the raw control bytes. A plain single-quoted plpgsql literal cannot carry \\n/\\t under standard_conforming_strings.",
+    "severity": "high"
+  },
+  {
+    "area": "string-interpolation-and-quoting",
+    "ruby": "path = \"C:\\\\tmp\\\\x\"     # Ruby value is  C:\\tmp\\x  (single backslashes)",
+    "wrong_output": "path := 'C:\\\\tmp\\\\x';   -- or raw passthrough of the token bytes",
+    "why_wrong": "Naive passthrough copies the source bytes of the string token (which still contain Ruby's doubled backslashes) into a plpgsql single-quoted literal. Under standard_conforming_strings=on, '\\\\' is TWO backslashes, so the value gains extra backslashes vs Ruby's one. The same double-counting hits single-quoted Ruby strings ('a\\\\b' -> Ruby a\\b) and the \\' / \\\" escapes. Ruby string escape semantics and plpgsql literal escape semantics are different alphabets; you cannot memcpy the token.",
+    "corrected_rule": "Always fully DECODE the Ruby string token to its abstract character sequence first (resolving \\\\, \\', \\\", \\n, etc. per single- vs double-quote rules), then RE-ENCODE for the target literal form actually chosen (double every ' ; if an E'...' string is used, re-escape every backslash). Never splice raw source bytes.",
+    "severity": "high"
+  },
+  {
+    "area": "string-interpolation-and-quoting",
+    "ruby": "query(\"SELECT * FROM #{tbl} WHERE id = #{uid}\").each do |r|\n  emit(r.id)\nend",
+    "wrong_output": "FOR r IN SELECT * FROM tbl WHERE id = uid LOOP\n  RETURN NEXT r.id;\nEND LOOP;",
+    "why_wrong": "The static-query rule turns every #{...} into a bare plpgsql name reference. That is only sound when the interpolation sits in a VALUE position (a bind is fine and safer than Ruby's textual splice). In IDENTIFIER position (#{tbl} as a table/column/keyword) plpgsql reads the literal name 'tbl' as the relation, not the value of the local variable tbl -> 'relation \"tbl\" does not exist' or, worse, a real table coincidentally named tbl. Ruby did a textual substitution; the name-ref path cannot. The transpiler parses no SQL, so it cannot tell value position from identifier position and picks value silently.",
+    "corrected_rule": "Value-position name-ref is the only sound static lowering. Identifier/fragment interpolation must go through the dynamic path (FOR r IN EXECUTE format('SELECT * FROM %I WHERE id = $1', tbl) USING uid) or be rejected. Since position is undecidable without a SQL parse, document the restriction and require execute()/format+quote_ident for identifier interpolation; do not silently name-ref it.",
+    "severity": "high"
+  },
+  {
+    "area": "string-interpolation-and-quoting",
+    "ruby": "x = \"has star */ inside\"   # any body byte-sequence containing  */",
+    "wrong_output": "... BEGIN\n  x := 'has star */ inside';\nEND;\n/*plx-orig$x = \"has star */ inside\"$plx-orig*/",
+    "why_wrong": "The final-assembly contract appends the verbatim Ruby source inside a C-style comment /*plx-orig$ ... $plx-orig*/. Any '*/' occurring in the original body (inside a string literal, a comment, or `a */ b` from an unsupported op) closes the comment early; the trailing bytes become live plpgsql and the stored prosrc is corrupt or fails to compile. The $plx-orig sentinel can likewise be forged by body text. This is a quoting/escaping failure of the embedded-original mechanism.",
+    "corrected_rule": "The embedded original must be encoded so it cannot contain the comment terminator or the sentinel: escape every '*/' (e.g. to '*\\/') on the way in and reverse on read, or base64/hex-encode the whole blob. A verbatim splice of arbitrary user bytes into a /* */ comment is never safe.",
+    "severity": "high"
+  },
+  {
+    "area": "string-interpolation-and-quoting",
+    "ruby": "row = \"v=#{f('a', 'b')}\"",
+    "wrong_output": "row := 'v=' || (f(''a'', ''b''))::text;",
+    "why_wrong": "If the '->'' quote-doubling is applied to the whole double-quoted string rather than only to the literal chunks, the single quotes belonging to SQL string literals INSIDE the #{...} expression get doubled too, producing invalid SQL (''a'' is not a valid literal in that position). The interpolated expression text is emitted verbatim as an expression and must never be quote-processed. This is the classic naive-substitution trap.",
+    "corrected_rule": "Split the string into literal chunks and interpolation spans FIRST. Apply ' -> '' (and, for RAISE, % -> %%) ONLY to literal-chunk text. Interpolation spans are handed to plx_rewrite_expr and emitted as-is; their internal quotes/percents are left untouched.",
+    "severity": "medium"
+  },
+  {
+    "area": "string-interpolation-and-quoting",
+    "ruby": "tmpl = \"use \\#{var} as a placeholder\"",
+    "wrong_output": "tmpl := 'use ' || (var)::text || ' as a placeholder';",
+    "why_wrong": "In Ruby, \\#{ is an escaped interpolation: the string value is the literal text 'use #{var} as a placeholder' with NO interpolation. If the lexer only special-cases #{ and ignores a preceding backslash, it wrongly interpolates var (and often fails at compile time because var is undeclared). Ruby's \\# escape is being dropped.",
+    "corrected_rule": "In double-quoted strings honor the \\# escape: a backslash immediately before #{ suppresses interpolation, yielding the literal two characters #{ in the chunk. Only an unescaped #{ opens an interpolation.",
+    "severity": "medium"
+  },
+  {
+    "area": "string-interpolation-and-quoting",
+    "ruby": "raise notice: \"processed #{a % b} of 100% (#{f('x')})\"",
+    "wrong_output": "RAISE NOTICE 'processed %% of 100%% (%)', a %% b, f(''x'');",
+    "why_wrong": "Two coupled bugs when the RAISE format/arg split is done by whole-string substitution: (1) the % that is the modulo operator inside #{a % b} gets doubled to %% and lands in the ARGUMENT expression, corrupting it; (2) the literal-100%-vs-placeholder distinction and the '->'' doubling leak into the argument f('x') producing f(''x''). Only the literal 'of 100% ' chunk should have its % doubled; the % inside interpolations and the quotes inside arg expressions must be left alone.",
+    "corrected_rule": "Build the RAISE format string from literal chunks only: within literal chunks double ' and double %, and replace each interpolation with a single % placeholder. Collect the interpolation expressions, verbatim (no quote/percent processing), as the ordered argument list. Never run the format-escaping over argument text.",
+    "severity": "medium"
+  },
+  {
+    "area": "string-interpolation-and-quoting",
+    "ruby": "s = \"prefix#{}suffix\"",
+    "wrong_output": "s := 'prefix' || ()::text || 'suffix';",
+    "why_wrong": "Ruby allows an empty interpolation #{} which contributes the empty string. Lowering it as (e)::text with an empty e yields ()::text \u2014 empty parentheses are a SQL syntax error at CREATE/compile time. A lone \"#{}\" would likewise emit ()::text on its own.",
+    "corrected_rule": "Treat an empty or whitespace-only #{} as an empty literal chunk: drop it (or emit ''). Never emit ()::text for an empty interpolation.",
+    "severity": "low"
+  },
+  {
+    "area": "The || concat-vs-or ambiguity (Ruby logical-or vs SQL string-concat, both spelled ||)",
+    "ruby": "greeting = \"Hi #{name}\"\nif admin || superuser\n  greeting = \"Hello #{name}\"\nend",
+    "wrong_output": "greeting := 'Hi ' OR (name)::text;\nIF admin OR superuser THEN\n  greeting := 'Hello ' OR (name)::text;\nEND IF;",
+    "why_wrong": "The transpiler uses the token || for TWO opposite purposes: (a) it EMITS || as SQL string concatenation from every interpolation/`+`/`<<` lowering, and (b) it must MAP source Ruby || to SQL ` OR `. If ||->OR is implemented as a substitution over the body (or the interpolation output is re-scanned by the rewrite pass), the concat || that interpolation just produced is destroyed into ` OR `, yielding `'Hi ' OR (name)::text` which is invalid plpgsql (OR requires boolean). The exact same token needs opposite treatment depending on whether it is source-authored or transpiler-generated \u2014 a plain text/token pass cannot tell them apart after the fact.",
+    "corrected_rule": "Do NOT implement ||->OR as a rewrite over post-interpolation text. Rewriting and interpolation-splicing must be ONE left-to-right pass over the SOURCE tokens: a source || OP token emits ` OR ` into the output buffer; concat || is emitted straight into the output buffer and is NEVER re-scanned. Origin (source-position vs generated) is the sole discriminator; track it, never re-lex generated concat.",
+    "severity": "high"
+  },
+  {
+    "area": "The || concat-vs-or ambiguity (Ruby logical-or vs SQL string-concat, both spelled ||)",
+    "ruby": "role = requested_role || \"guest\"\nreturn config_name || default_name",
+    "wrong_output": "role := requested_role OR 'guest';\nRETURN config_name OR default_name;",
+    "why_wrong": "The rule ||-> OR is applied unconditionally, but Ruby's || in VALUE position is a coalescing operator (returns the first truthy operand, not a boolean). `x = a || b` is the idiomatic default-value pattern. Lowered to `a OR b`, plpgsql rejects it at compile time when a/b are text/int ('argument of OR must be type boolean'), or \u2014 if a/b happen to be boolean \u2014 silently computes a boolean instead of selecting a value. This is invalid-plpgsql for the common case and silent-wrong for the boolean case.",
+    "corrected_rule": "Only rewrite ||/&& to OR/AND in BOOLEAN CONTEXT (the condition slots of if/unless/while/until and their modifier forms). In value/assignment/return context, || and && are not boolean ops: reject with a precise ereport pointing at COALESCE(a,b) (documenting the false-vs-NULL divergence: Ruby || treats false as falsy, COALESCE only catches NULL) or an explicit ternary. The blanket \u00a73 rule 'if->=, ||->OR everywhere' is wrong for value position.",
+    "severity": "high"
+  },
+  {
+    "area": "The || concat-vs-or ambiguity (Ruby logical-or vs SQL string-concat, both spelled ||)",
+    "ruby": "label = \"user:#{uname}\"\nmsg = \"#{a}-#{b}\"",
+    "wrong_output": "label := 'user:' || (uname)::text;\nmsg := (a)::text || '-' || (b)::text;",
+    "why_wrong": "Interpolation lowers to || concatenation, but SQL || propagates NULL: if uname IS NULL the whole result is NULL, so `label` becomes NULL instead of the string 'user:'. Ruby interpolation coerces nil to the empty string ('user:'), never nulls the surrounding literal. Any interpolation whose spliced value can be NULL silently loses the entire string \u2014 a data-corruption-class wrong result, not a crash.",
+    "corrected_rule": "Interpolation must NOT lower to bare ||. To match Ruby nil->\"\", either wrap each spliced chunk as COALESCE((e)::text,'') or lower the whole interpolation via concat(...) (which ignores NULLs). Document that plexcellent interpolation follows Ruby (nil->'') and therefore diverges from raw SQL || NULL-propagation.",
+    "severity": "high"
+  },
+  {
+    "area": "The || concat-vs-or ambiguity (Ruby logical-or vs SQL string-concat, both spelled ||)",
+    "ruby": "flags = flags << bit\nbuf << \"x\"",
+    "wrong_output": "flags := flags || bit;\nbuf || 'x';",
+    "why_wrong": "The rule `a << b -> a || b` is blind to operand type and statement shape. (1) For integers, Ruby << is left bit-shift and PostgreSQL ALSO spells bit-shift as << \u2014 rewriting to || turns a valid shift into `integer || integer`, which has no operator in PG (invalid plpgsql). (2) Ruby << mutates its receiver in place; `buf << \"x\"` is a statement with a side effect, but `buf || 'x';` is a bare expression that assigns nothing \u2014 the append is silently dropped (and is not even a legal plpgsql statement).",
+    "corrected_rule": "Do not blanket-rewrite << to ||. Leave << verbatim (PG << is integer bit-shift) OR reject it, since the shovel/append meaning cannot be recovered without types and, as a bare statement, has no plpgsql equivalent. String/array building must go through interpolation or an explicit `x = x || y` assignment.",
+    "severity": "medium"
+  },
+  {
+    "area": "The || concat-vs-or ambiguity (Ruby logical-or vs SQL string-concat, both spelled ||)",
+    "ruby": "full = first + last\ncount = base + \"0\"",
+    "wrong_output": "full := first + last;\ncount := base || '0';",
+    "why_wrong": "The `+ -> ||` heuristic keys only on 'is one operand token a string literal', which misfires both ways. (1) `first + last` (two text vars, no literal token) stays numeric `+`, producing a runtime error 'operator does not exist: text + text' \u2014 the failure is deferred to runtime, not caught at CREATE. (2) `base + \"0\"` where the intent is numeric produces `base || '0'` (string concat) because \"0\" is a literal token \u2014 a silently wrong result/type. The generated || here is again the concat-vs-or surface: the heuristic manufactures || from + with no type knowledge.",
+    "corrected_rule": "Drop the literal-token `+ -> ||` heuristic as a silent default (it is wrong in both directions). Make interpolation the sanctioned concat path; either infer + vs || from resolved operand types (DECLARE/meta), or leave + verbatim and require || only via interpolation, documenting that + is always SQL numeric +.",
+    "severity": "medium"
+  },
+  {
+    "area": "The || concat-vs-or ambiguity (Ruby logical-or vs SQL string-concat, both spelled ||)",
+    "ruby": "ok = validate(x) or return false\nflag = a or b",
+    "wrong_output": "ok := validate(x) or RETURN false;   -- (and) flag := a or b;",
+    "why_wrong": "The rewrite set converts && and || but says nothing about Ruby's low-precedence keyword forms `and`/`or`/`not` (which the scanner already recognizes as KW_AND/KW_OR/KW_NOT). Passed through verbatim they become SQL AND/OR/NOT, but Ruby `and`/`or` bind LOWER than assignment: `flag = a or b` parses in Ruby as `(flag = a) or b`, whereas SQL evaluates `flag := a OR b`. Same class of OR-ambiguity: the operator survives but its precedence relative to = silently changes the result; and `x or return` (control-flow-as-value) has no SQL form at all.",
+    "corrected_rule": "Treat keyword `and`/`or`/`not` explicitly. In boolean condition context map to AND/OR/NOT like &&/||/!. In value/assignment context reject them (their Ruby precedence below `=` and their use with control-flow like `or return` cannot be faithfully lowered) rather than passing through verbatim.",
+    "severity": "low"
+  },
+  {
+    "area": "declare-hoisting and OUT-param/loop-var shadowing",
+    "ruby": "query(\"SELECT id, amount FROM orders\").each do |row|\n  total = total + row.amount\nend",
+    "wrong_output": "BEGIN\n  FOR row IN SELECT id, amount FROM orders LOOP\n    total := total + row.amount;\n  END LOOP;\nEND;   -- no DECLARE for row",
+    "why_wrong": "The declare pass's default rule says record/loop FOR vars are 'implicitly declared by plpgsql' and must NOT be hoisted, and even flags the ARCHITECTURE example's `row RECORD;` as non-default opt-in. That is false: plpgsql auto-declares ONLY the integer/range FOR var (`FOR i IN a..b`). A query FOR (`FOR row IN <select> LOOP`) requires `row` to be a previously DECLAREd record/row variable, so CREATE FUNCTION fails at compile with `ERROR: \"row\" is not a known variable` (or 'loop variable ... must be a record variable'). Every query-iteration function is therefore invalid, and the rule contradicts the FORQUERY lowering component which correctly hoists RECORD.",
+    "corrected_rule": "Query/record FOR vars must ALWAYS be hoisted as `name RECORD;` (mandatory, not opt-in). Restrict the 'plpgsql auto-declares the FOR var, do not hoist' rule strictly to integer/range FOR. Register the record var in `bound` (so assignments inside the body are `:=`, not new locals) AND add its RECORD declaration to the symtab.",
+    "severity": "high"
+  },
+  {
+    "area": "declare-hoisting and OUT-param/loop-var shadowing",
+    "ruby": "CREATE FUNCTION f(...) RETURNS TABLE(cnt int, id int) AS $$\nquery(\"SELECT id FROM t\").each_with_index do |row, cnt|\n  id = row.id\n  emit\nend\n$$",
+    "wrong_output": "DECLARE\n  cnt integer;   -- duplicates the TABLE OUT column 'cnt'\n  row RECORD;\nBEGIN\n  cnt := -1;\n  FOR row IN SELECT id FROM t LOOP\n    cnt := cnt + 1;   -- overwrites the OUT column every row\n    id := row.id;\n    RETURN NEXT;\n  END LOOP;\nEND;",
+    "why_wrong": "The bound-vs-params shadow check is specified only for the PRIMARY loop var. The each_with_index index counter goes through the synthesized-decl path ('hoists idx integer'), which neither registers it in `bound` nor checks it against params. If the counter name equals an OUT/INOUT/TABLE column it either duplicate-declares the param (plpgsql: 'variable cnt already declared') or, if hoisting correctly skips the param, the emitted `cnt := -1` / `cnt := cnt+1` silently clobber the output column on every iteration.",
+    "corrected_rule": "Register BOTH block params (record var and index counter) into `bound` before recursing, and run the bound-vs-params collision reject on both. If the index name matches any arg/OUT/INOUT/VARIADIC/TABLE name -> ereport 'index variable collides with parameter; rename'. Never emit a DECLARE or a `:=` reset for a name that is a function parameter.",
+    "severity": "high"
+  },
+  {
+    "area": "declare-hoisting and OUT-param/loop-var shadowing",
+    "ruby": "CREATE FUNCTION f(int, OUT numeric) AS $$\nx = 0 #:: integer\nreturn x\n$$",
+    "wrong_output": "(crash) hash_search(params, NULL, HASH_ENTER) on a NULL key",
+    "why_wrong": "The rule 'seed params from meta->argnames[0..nargs) for ANY argmode' assumes every argument is named. get_func_arg_info returns NULL (or empty) name entries for unnamed/positional args (like `f(int, OUT numeric)`). Feeding a NULL key into a HASH_STRINGS dynahash dereferences NULL -> segfault at CREATE time, taking down the backend instead of transpiling.",
+    "corrected_rule": "Skip NULL/empty argnames when seeding the params set; unnamed args are only reachable positionally ($n) and cannot collide with a Ruby identifier. Guard every hash_search key against NULL before insert/lookup.",
+    "severity": "high"
+  },
+  {
+    "area": "declare-hoisting and OUT-param/loop-var shadowing",
+    "ruby": "query(\"SELECT id FROM a\").each do |row|\n  x = row.id\nend\nquery(\"SELECT id FROM b\").each do |row|\n  y = row.id\nend",
+    "wrong_output": "-- CREATE fails: plruby: duplicate loop variable \"row\" (already in scope)",
+    "why_wrong": "`bound` is registered for the WHOLE function lifetime ('it stays bound for the whole function, flat scope') and 'duplicate names in scope are a hard error'. Two SEQUENTIAL, non-overlapping loops reusing the idiomatic name `row` are therefore rejected, even though the emitted plpgsql (`FOR row IN ... LOOP` twice, sharing one `row RECORD` decl) is perfectly legal and this pattern is ubiquitous Ruby.",
+    "corrected_rule": "The distinct-name requirement applies only to LEXICALLY NESTED / currently-open loop frames, not closed sibling loops. Track active loop vars on a stack pushed on loop-open and popped on loop-close; only an open frame's var triggers the collision error. A single shared `row RECORD;` declaration is reused across sibling loops.",
+    "severity": "high"
+  },
+  {
+    "area": "declare-hoisting and OUT-param/loop-var shadowing",
+    "ruby": "query(\"SELECT id FROM t\").each do |row|\n  perform(\"INSERT INTO log VALUES (#{row.id})\")\nend\nrow = 5 #:: integer\nreturn row",
+    "wrong_output": "DECLARE\n  row RECORD;\nBEGIN\n  FOR row IN SELECT id FROM t LOOP\n    INSERT INTO log VALUES (row.id);\n  END LOOP;\n  row := 5;         -- assigns integer 5 to a RECORD\n  RETURN row;\nEND;   -- annotation #:: integer is silently ignored",
+    "why_wrong": "Because `bound` is function-global, the post-loop `row = 5 #:: integer` -- a legitimately separate scalar local in Ruby (block params are block-local; `row` is undefined after `.each`) -- is treated as an assignment to the still-bound loop record var. Its `#:: integer` annotation is dropped, no integer local is created, and `row := 5` assigns an integer to a RECORD -> plpgsql type error. (If the record var were not hoisted, `row` would instead be undeclared.)",
+    "corrected_rule": "Scope `bound` to the loop body only; after the loop closes the name is a normal hoist candidate. Since a flat plpgsql scope cannot hold both `row RECORD` and `row integer`, detect the conflicting reuse and reject with a rename message. At minimum, `bound` must never silently suppress hoisting/annotation of a same-named local that is used outside the loop.",
+    "severity": "high"
+  },
+  {
+    "area": "declare-hoisting and OUT-param/loop-var shadowing",
+    "ruby": "begin\n  perform(\"INSERT INTO t VALUES (1)\")\nrescue => e\n  detail = e.detail #:: text\n  raise notice: detail\nend",
+    "wrong_output": "... EXCEPTION WHEN OTHERS THEN\n  GET STACKED DIAGNOSTICS __plx_e_detail = PG_EXCEPTION_DETAIL;\n  detail := __plx_e_detail;\n  RAISE NOTICE '%', detail;\n-- __plx_e_detail never declared",
+    "why_wrong": "The hoist pass collects only user assignment LHS names. Synthesized variables injected by other lowering rules -- the `__plx_e_detail`/`__plx_e_hint` GET STACKED DIAGNOSTICS temps and the each_with_index counter -- are emitted into the body but never registered in the symtab, so they get no DECLARE line -> `ERROR: \"__plx_e_detail\" is not a known variable`. Symmetrically, a user local literally named `__plx_e_detail` (or a synthesized counter name) collides with the injected one and duplicate-declares.",
+    "corrected_rule": "Route EVERY synthesized variable (exception-diagnostic temps, each_with_index counters) through the same symtab so it receives a DECLARE line and participates in dedup/collision detection. Use a reserved identifier prefix and reject any user identifier that collides with it.",
+    "severity": "high"
+  },
+  {
+    "area": "declare-hoisting and OUT-param/loop-var shadowing",
+    "ruby": "total = 0 #:: integer\nfor i in 1..n\n  total += i\nend\nreturn i",
+    "wrong_output": "DECLARE\n  total integer := 0;\nBEGIN\n  FOR i IN 1..n LOOP\n    total := total + i;\n  END LOOP;\n  RETURN i;\nEND;",
+    "why_wrong": "The integer FOR var `i` is loop-local and does not exist after the loop; Ruby's `for` leaks `i` (== n post-loop). `RETURN i` references an undefined var, which plpgsql resolves as a column reference -> runtime `ERROR: column \"i\" does not exist`. The 'documented for-leak divergence' here is not a silent wrong value but an outright failure the pass never detects. Symmetrically, adding `i = 0 #:: integer` at top level hoists `i` AND has the FOR create a shadowing loop-local (walk-order dependent), so `return i` yields the stale outer value.",
+    "corrected_rule": "Detect any reference to an integer FOR var outside its loop body (and any hoisted local sharing a FOR var's name). Either reject at CREATE ('for-loop variable i is not visible after the loop') or hoist an outer local and copy the loop value each iteration to honor leak semantics. Pre-scan all loop vars into `bound` in a first pass BEFORE hoist collection to eliminate the walk-order dependence.",
+    "severity": "medium"
+  },
+  {
+    "area": "declare-hoisting and OUT-param/loop-var shadowing",
+    "ruby": "u = 0 #:: integer\nu = fetch_one(\"SELECT id, name FROM users WHERE id = 1\")\nreturn u.name",
+    "wrong_output": "DECLARE\n  u integer := 0;\nBEGIN\n  u := 0;\n  SELECT * INTO u FROM (SELECT id, name FROM users WHERE id = 1) AS __plx_fo_1;\n  RETURN u.name;\nEND;",
+    "why_wrong": "Type resolution is 'first resolvable site in source order wins', so `u` is fixed as integer from the annotated literal. But the later whole-row `fetch_one` requires `u` to be RECORD. `SELECT * INTO u` (a scalar integer) with two result columns raises a runtime error, and `u.name` on an integer is a compile error. The first-site rule ignores that whole-row fetch usage is authoritative for the RECORD kind.",
+    "corrected_rule": "A whole-row `fetch_one` target forces PLX_T_RECORD and must override a scalar literal/annotation for the same name; when a name is used both as a scalar (literal/annotation/scalar-destructure) and as a whole-row fetch target, ereport a precise conflict at CREATE rather than emitting `SELECT * INTO <scalar>`.",
+    "severity": "medium"
+  },
+  {
+    "area": "declare-hoisting and OUT-param/loop-var shadowing",
+    "ruby": "userId = 1 #:: integer\nuserid = 2 #:: bigint\nreturn userId + userid",
+    "wrong_output": "DECLARE\n  userid integer := 1;   -- or hard 'conflicting annotation' error\nBEGIN\n  userid := 1;\n  userid := 2;\n  RETURN userid + userid;\nEND;",
+    "why_wrong": "Ruby identifiers are case-sensitive, so `userId` and `userid` are two distinct locals. The pass keys the symtab by downcase_truncate_identifier, folding both to `userid`: either they silently dedup into ONE storage location (aliasing -> wrong results, here `2 + 2`) or, because their annotations differ, it raises a spurious 'conflicting annotation integer vs bigint'. Same failure via 63-byte NAMEDATALEN truncation for long names differing only past byte 63.",
+    "corrected_rule": "Before folding, detect two source identifiers that become identical under plpgsql case-folding or 63-byte truncation and ereport 'identifiers \"userId\" and \"userid\" are indistinguishable to plpgsql (case-insensitive / 63-byte truncation); rename'. Never silently merge case-distinct Ruby locals.",
+    "severity": "medium"
+  },
+  {
+    "area": "Operator rewrites inside string literals / false positives \u2014 plx_rewrite_expr (\u00a73 token rewriter), the interpolation-to-`||` splice, the RAISE `%`/arg builder, the statement splitter's comment/string tracking, and the `+`\u2192`||` string heuristic.",
+    "ruby": "msg = 'use #{x} && y unless z'   #:: text",
+    "wrong_output": "msg := 'use ' || (x)::text || ' AND y unless z';",
+    "why_wrong": "The source is a SINGLE-quoted Ruby string, which does NOT interpolate and is fully literal. A rewriter that scans for `#{` and for `&&`/`unless` without gating on the quote-kind of the enclosing string treats literal text as code: it splices `#{x}` and rewrites `&&`\u2192AND (and would even mis-see the word `unless`). The user's literal string is silently corrupted. This is the canonical false-positive: operator/interpolation rewriting reaching inside a string literal.",
+    "corrected_rule": "The rewriter must carry the same opaque-string state the lexer uses: inside a single-quoted string NOTHING is rewritten \u2014 no `#{}` splice, no `&&`/`==`/`!`/keyword rewrite, no `+`\u2192`||`. Only `'`-doubling for re-emission. `#{...}` is an interpolation ONLY inside double-quoted strings/heredocs; in single-quoted strings `#{` is inert literal text.",
+    "severity": "high"
+  },
+  {
+    "area": "Operator rewrites inside string literals / false positives \u2014 plx_rewrite_expr (\u00a73 token rewriter), the interpolation-to-`||` splice, the RAISE `%`/arg builder, the statement splitter's comment/string tracking, and the `+`\u2192`||` string heuristic.",
+    "ruby": "banner = \"line1\\nline2\\ttab\\\\end\"",
+    "wrong_output": "banner := 'line1\\nline2\\ttab\\\\end';",
+    "why_wrong": "Naively swapping the double-quote delimiters for single quotes leaves the Ruby escape sequences (`\\n`,`\\t`,`\\\\`) as literal backslash-letter pairs. With standard_conforming_strings=on (default), plpgsql `'line1\\nline2'` is the 6-glyph text back-slash-n, NOT a newline. Ruby meant a real newline/tab. The string content is wrong at runtime with no error.",
+    "corrected_rule": "Double-quoted strings and bare/`\"`-quoted heredocs must have their Ruby escapes decoded and re-emitted as an E-string: translate `\\n\\t\\r\\0\\\\\\\"` etc. to the corresponding control chars and emit `E'...'` (escaping `'`\u2192`''` and `\\`\u2192`\\\\` in E-context), or embed the literal control characters in an ordinary `'...'`. The heredoc example in the digest already does this (`E'\\nWHERE ...'`); the same decode MUST apply to every double-quoted literal, not just heredocs. Single-quoted Ruby strings keep their bytes verbatim (only `'`\u2192`''`).",
+    "severity": "high"
+  },
+  {
+    "area": "Operator rewrites inside string literals / false positives \u2014 plx_rewrite_expr (\u00a73 token rewriter), the interpolation-to-`||` splice, the RAISE `%`/arg builder, the statement splitter's comment/string tracking, and the `+`\u2192`||` string heuristic.",
+    "ruby": "note = \"it's #{n} o'clock\"",
+    "wrong_output": "note := 'it's ' || (n)::text || ' o'clock';",
+    "why_wrong": "When interpolation is lowered by splicing the raw literal chunks between `#{}` spans, the literal chunks (`it's `, ` o'clock`) still contain un-escaped single quotes. The emitted plpgsql `'it's '` terminates the string early \u2192 syntax error at CREATE (or worse, a body that parses into something unintended). The `'`-doubling rule is stated for the rewriter but is easy to apply only to whole-string literals and miss on inter-interpolation chunks.",
+    "corrected_rule": "Each literal chunk carved out between interpolation spans is itself a string literal and must be run through the SAME escaping used for whole literals (`'`\u2192`''`, plus escape decoding per the E-string rule) BEFORE concatenation. i.e. `'it''s ' || (n)::text || ' o''clock'`.",
+    "severity": "high"
+  },
+  {
+    "area": "Operator rewrites inside string literals / false positives \u2014 plx_rewrite_expr (\u00a73 token rewriter), the interpolation-to-`||` splice, the RAISE `%`/arg builder, the statement splitter's comment/string tracking, and the `+`\u2192`||` string heuristic.",
+    "ruby": "raise notice: \"discount #{pct}%\"",
+    "wrong_output": "RAISE NOTICE 'discount %%%', pct;",
+    "why_wrong": "The rule 'interpolation \u2192 % placeholder, literal % \u2192 %%, concatenate in source order' produces the format `discount ` + `%` (placeholder) + `%%` (escaped literal) = `discount %%%`. plpgsql's RAISE parser scans left-to-right and is greedy: it reads the first `%%` as a literal percent, then the trailing `%` as the placeholder. So it renders \"discount %\" followed by pct \u2192 \"discount %20\", not \"discount 20%\". Any placeholder immediately abutting a following literal `%` flips order, because a placeholder-then-literal-% cannot be represented positionally (`%` + `%%` = `%%%` always parses as literal-then-placeholder).",
+    "corrected_rule": "Do not rely on positional `%`/`%%` when a placeholder is adjacent to a literal percent (in general, whenever the message contains a literal `%`). Lower interpolated RAISE messages through a single-placeholder concat form instead: `RAISE NOTICE '%', 'discount ' || (pct)::text || '%';`. This eliminates all `%`-escaping/ordering hazards. If the `%`/arg form is kept, detect placeholder-adjacent-literal-% and fall back to the concat form.",
+    "severity": "high"
+  },
+  {
+    "area": "Operator rewrites inside string literals / false positives \u2014 plx_rewrite_expr (\u00a73 token rewriter), the interpolation-to-`||` splice, the RAISE `%`/arg builder, the statement splitter's comment/string tracking, and the `+`\u2192`||` string heuristic.",
+    "ruby": "label = \"count: #{c}\"   #:: text",
+    "wrong_output": "label := 'count: ' || (c)::text;",
+    "why_wrong": "SQL `||` propagates NULL: if `c` IS NULL then `'count: ' || NULL` is NULL, so the ENTIRE label becomes NULL. Ruby renders `#{nil}` as the empty string, giving \"count: \". Silent wrong result (whole value nulled) with no error \u2014 exactly the class of bug the architecture flags as the product risk.",
+    "corrected_rule": "Lower interpolation with NULL-as-empty semantics to match Ruby: use `concat('count: ', c)` (concat treats NULL as ''), or wrap each spliced value `COALESCE((c)::text,'')`. If the `||` form is retained for performance, this divergence MUST be documented prominently. Note the RAISE `%`-arg path prints `<NULL>` for the same input \u2014 a third distinct behavior \u2014 so both paths should be reconciled/documented.",
+    "severity": "high"
+  },
+  {
+    "area": "Operator rewrites inside string literals / false positives \u2014 plx_rewrite_expr (\u00a73 token rewriter), the interpolation-to-`||` splice, the RAISE `%`/arg builder, the statement splitter's comment/string tracking, and the `+`\u2192`||` string heuristic.",
+    "ruby": "x = \"a #{fmt(\"b #{y} c\")} d\"",
+    "wrong_output": "x := 'a ' || (fmt(\"b #{y} c\"))::text || ' d';",
+    "why_wrong": "The inner interpolation expression contains a nested DOUBLE-quoted Ruby string with its own `#{y}`. If the interp span is spliced verbatim (as (start,len) into source), the emitted plpgsql contains `fmt(\"b #{y} c\")`: a SQL double-quoted token (interpreted as an identifier, not a string) and a literal `#{y}`. That is invalid/misparsed plpgsql. The lexer recurses into nested strings for boundary-finding, but the REWRITER's 'splice the span verbatim' step does not re-lower it.",
+    "corrected_rule": "plx_rewrite_expr must be applied RECURSIVELY to interpolation-expression text, not spliced verbatim: nested `\"...\"` strings inside `#{}` must themselves be lowered (double\u2192single quotes, their own `#{}`\u2192`|| (y)::text`, escape decoding). Equivalently, run the full expression rewriter over each interpolation span before wrapping it in `(...)::text`.",
+    "severity": "medium"
+  },
+  {
+    "area": "Operator rewrites inside string literals / false positives \u2014 plx_rewrite_expr (\u00a73 token rewriter), the interpolation-to-`||` splice, the RAISE `%`/arg builder, the statement splitter's comment/string tracking, and the `+`\u2192`||` string heuristic.",
+    "ruby": "msg = \"50% off # ends soon\"",
+    "wrong_output": "msg := 'ends soon' -- string truncated at the '#'  (or: unterminated string literal error)",
+    "why_wrong": "The statement splitter / comment stripper drops `#`..EOL as a comment. A `#` that lives INSIDE a string literal is not a comment. If the splitter's comment handling does not gate on string state (or gates only on `#{`/`#::` and treats a bare `#` as always-comment), it truncates the literal at `# ends soon`, leaving `\"50% off ` unterminated. Note the `#` here is NOT followed by `{`, so a naive 'comment unless #{ ' test misfires.",
+    "corrected_rule": "Comment detection (`#`..EOL) must run only when NOT inside a single/double-quoted string, `#{}` interpolation, or heredoc body \u2014 the splitter must share the exact opaque-container tracking of the pass-1 lexer. A `#` inside a string is a literal byte; `#::` and plain `#` handling apply only in code position.",
+    "severity": "high"
+  },
+  {
+    "area": "Operator rewrites inside string literals / false positives \u2014 plx_rewrite_expr (\u00a73 token rewriter), the interpolation-to-`||` splice, the RAISE `%`/arg builder, the statement splitter's comment/string tracking, and the `+`\u2192`||` string heuristic.",
+    "ruby": "greeting = \"Hello, \"\nfull = greeting + name\ntag = amount + \"%\"",
+    "wrong_output": "full := greeting + name;   -- (no literal token at this '+', stays numeric +)\ntag := amount || '%';       -- ('%' literal token triggers +\u2192||)",
+    "why_wrong": "The `+`\u2192`||` heuristic keys on 'an operand TOKEN is a quoted literal', which misfires both directions. `greeting + name` are two text VARIABLES with no literal at the operator, so `+` stays numeric \u2192 runtime error `operator does not exist: text + text` (mapped back through the source map, not a crisp CREATE-time error). Conversely `amount + \"%\"` (amount numeric) is silently rewritten to `amount || '%'`, coercing a numeric to text and changing the result type. The literal-adjacency test is unsound as a concat detector.",
+    "corrected_rule": "Do not infer concatenation from literal-adjacency to `+`. Prefer making interpolation the single supported concatenation path (`\"#{greeting}#{name}\"`) and the explicit shovel `a << b`\u2192`a || b` for concat. For `+` between operands whose types the transpiler cannot determine, leave it as SQL `+` and document that string concatenation must use interpolation or `<<`; optionally warn at CREATE time when `+` has exactly one string-literal operand rather than silently rewriting.",
+    "severity": "medium"
+  },
+  {
+    "area": "ranges and off-by-one (inclusive vs exclusive)",
+    "ruby": "10.step(1, -2) do |v|\n  s += v\nend",
+    "wrong_output": "FOR v IN 10..1 BY -2 LOOP\n  s := s + v;\nEND LOOP;",
+    "why_wrong": "The rule `.step(k) -> BY k` blindly passes the Ruby step through. Ruby `Numeric#step(limit, -2)` counts DOWN (10,8,6,4,2 -- limit inclusive). The emitted plpgsql is invalid: stock plpgsql raises `ERROR: BY value of FOR loop must be greater than zero` at runtime, and even ignoring that, `10..1` ascending would yield zero iterations. A descending step is the single most common `Integer#step` idiom and it produces a hard runtime error, not the intended loop.",
+    "corrected_rule": "When the recognized `LO.step(HI,k)` (or `(LO..HI).step(k)`) has a *literal negative* k, lower to `FOR v IN REVERSE LO'..HI' BY (-k) LOOP` (Numeric#step limit is INCLUSIVE, so no -1 on HI). When k is a non-literal expression whose sign is unknowable at CREATE time, either reject with a precise message or document that k must be > 0 at runtime (plpgsql BY must be positive; direction cannot be chosen dynamically). Never emit `BY <negative>`.",
+    "severity": "high"
+  },
+  {
+    "area": "ranges and off-by-one (inclusive vs exclusive)",
+    "ruby": "(0...9).step(3).each do |v|\n  s += v\nend",
+    "wrong_output": "FOR v IN 0..9 BY 3 LOOP\n  s := s + v;\nEND LOOP;",
+    "why_wrong": "The enumerated `.step` surface forms only list the INCLUSIVE range spelling `(LO..HI).step(k)`; the exclusive `(LO...HI).step(k)` form is not in the table. A naive implementation that lowers the `.step` construct through the inclusive `(LO..HI)` template drops the exclusivity `-1`. Result iterates 0,3,6,9. Ruby `(0...9).step(3)` yields 0,3,6 -- 9 is excluded. This is a silent off-by-one that appears ONLY when the step lands exactly on the excluded endpoint, so it passes casual tests. (Note: applying the `-1` correctly, `0..(9-1)=0..8 BY 3`, gives the right 0,3,6 -- so the fix is to guarantee composition, not to special-case.)",
+    "corrected_rule": "The exclusive `-1` adjustment on HI must be applied BEFORE/independently of step lowering, i.e. exclusive-with-step lowers to `FOR v IN LO'..(HI' - 1) BY k' LOOP`. Make the exclusive flag a property of the range node consumed by every for-loop lowering path (plain, step, upto), never a branch that only fires when no step is present. Add `(LO...HI).step(k)` explicitly to the recognized surface set with a golden test whose step hits the excluded endpoint.",
+    "severity": "high"
+  },
+  {
+    "area": "ranges and off-by-one (inclusive vs exclusive)",
+    "ruby": "(0..10).step(2.5).each do |v|\n  s += v\nend",
+    "wrong_output": "FOR v IN 0..10 BY 2.5 LOOP\n  s := s + v;\nEND LOOP;",
+    "why_wrong": "Ruby `(0..10).step(2.5)` yields the floats 0.0,2.5,5.0,7.5,10.0. Stock plpgsql's integer FOR loop declares the loop variable as `integer` and coerces BY to it: `BY 2.5` is either rejected or silently truncated toward an integer step, so the loop runs with step 2 (or 3) and iterates over the wrong values with an integer variable -- a silent wrong result, not the intended fractional sequence. Same class of bug for a fractional `.step` on `Numeric#step`.",
+    "corrected_rule": "A non-integer (decimal/float) step literal is out of the integer-FOR subset: reject at CREATE time with `plruby: fractional step in .step(...) is not supported (integer FOR loops only)`. Do not pass a non-integer BY into plpgsql's integer FOR. Likewise reject non-integer range endpoints (see below).",
+    "severity": "medium"
+  },
+  {
+    "area": "ranges and off-by-one (inclusive vs exclusive)",
+    "ruby": "(a..b).step(k).each do |v|\n  s += v\nend",
+    "wrong_output": "FOR v IN a..b BY k LOOP\n  s := s + v;\nEND LOOP;",
+    "why_wrong": "When k is a variable/expression, its sign and value are unknown at CREATE time. If k evaluates to 0 or negative at runtime, plpgsql raises `BY value of FOR loop must be greater than zero`. Ruby tolerates any nonzero step (negative = descending). So a program that is well-defined in Ruby becomes a runtime error, and the transpiler gives no CREATE-time indication. This is the dynamic-value analogue of the negative-literal-step bug and cannot be fixed by direction inference.",
+    "corrected_rule": "Document that a non-literal `.step(k)` requires k > 0 at runtime (plpgsql cannot pick loop direction dynamically); recommend a literal step or an explicit REVERSE form. Optionally emit a CREATE-time NOTICE/warning when the step is a non-literal expression. At minimum this divergence must be documented, not silently deferred to a cryptic plpgsql runtime error.",
+    "severity": "medium"
+  },
+  {
+    "area": "ranges and off-by-one (inclusive vs exclusive)",
+    "ruby": "ok = (1...10).include?(x) == flag",
+    "wrong_output": "ok := x >= 1 AND x < 10 = flag;",
+    "why_wrong": "The exclusive membership rewrite `(a...b).include?(x) -> x >= a AND x < b` produces a NON-atomic, unparenthesized predicate. Spliced into a larger expression it re-associates against surrounding operators. Here `=` binds tighter than `AND`, so plpgsql parses `x >= 1 AND (x < 10 = flag)` -- comparing a boolean `flag` to the integer `x` and AND-ing the result, i.e. a completely different (and type-erroring/wrong) expression than Ruby's `((1...10).include?(x)) == flag`. The inclusive form `x BETWEEN a AND b` is a single predicate and does not have this hazard, which makes the bug asymmetric and easy to miss.",
+    "corrected_rule": "Always wrap the exclusive membership expansion in parentheses: `(a...b).include?(x) -> (x >= a AND x < b)`. (The inclusive `x BETWEEN a AND b` is already atomic but parenthesizing it too is harmless and consistent.) Any multi-token predicate produced by the rewriter must be self-parenthesized before it is substituted into an outer expression slot.",
+    "severity": "medium"
+  },
+  {
+    "area": "ranges and off-by-one (inclusive vs exclusive)",
+    "ruby": "for i in 1..\n  perform(\"...\")\nend\n# and: for i in 1.0..5.0",
+    "wrong_output": "FOR i IN 1.. LOOP\n  ...\nEND LOOP;\n-- and: FOR i IN 1.0..5.0 LOOP",
+    "why_wrong": "Ruby endless/beginless ranges (`1..`, `..5`) and float-endpoint ranges are silently in the `..`/`...` path. The scanner lexes `..` as an OP and the lowering emits `LO'..HI'` verbatim, yielding `FOR i IN 1.. LOOP` (a syntax error in the transpiled body) or `FOR i IN 1.0..5.0 LOOP` (float bounds on an integer loop var -> plpgsql error / truncation). Because the error surfaces from the transpiled plpgsql rather than a crisp CREATE-time plruby error, the source map points at synthesized text and the user sees a confusing message.",
+    "corrected_rule": "Detect a missing endpoint (endless/beginless range) in a FOR/each range and reject: `plruby: endless/beginless ranges are not supported in a for/each loop`. Detect a non-integer literal endpoint and reject as out-of-subset (integer FOR only). Never let a malformed range fall through to `FOR i IN 1.. LOOP`.",
+    "severity": "low"
+  },
+  {
+    "area": "ranges and off-by-one (inclusive vs exclusive)",
+    "ruby": "for i in 1..10000000000\n  s += i\nend",
+    "wrong_output": "FOR i IN 1..10000000000 LOOP\n  s := s + i;\nEND LOOP;",
+    "why_wrong": "The range bound `10000000000` exceeds int4 range. Stock plpgsql's integer FOR loop uses a 32-bit `integer` loop variable and bounds; this bound overflows and plpgsql raises `value out of range: overflow` (or the loop var overflows) at runtime. Ruby integers are arbitrary precision and iterate fine. This is a range-specific correctness/validity gap: the loop-var type is fixed to `integer`, so a perfectly valid Ruby range becomes a runtime overflow with no CREATE-time signal, and it's exactly adjacent to the inclusive/exclusive endpoint arithmetic (the `-1` on `...` can itself underflow at INT_MIN).",
+    "corrected_rule": "Document that integer FOR loop bounds are constrained to int4 (plpgsql loop-variable type). Where a bound is a literal outside int4 range, reject at CREATE time with a precise message rather than deferring to a runtime overflow; and guard the exclusive `(HI-1)` rewrite so it does not underflow for an INT_MIN literal endpoint.",
+    "severity": "low"
+  },
+  {
+    "area": "RAISE placeholder/USING mapping (Ruby dialect \u2192 plpgsql RAISE)",
+    "ruby": "raise notice: \"#{pct}% done\"",
+    "wrong_output": "RAISE NOTICE '%%% done', pct;   -- plpgsql prints \"%50 done\", not \"50% done\"",
+    "why_wrong": "Chunks in source order are [placeholder for pct][literal \"% done\"]. The rule 'interpolation->%' then 'literal %->%%' yields format '%' + '%% done' = '%%% done'. plpgsql's RAISE format scanner matches %% greedily left-to-right, so '%%%' parses as (literal %)+(placeholder), i.e. literal-percent-THEN-argument. That reverses the intended order: a placeholder immediately followed by a literal % is simply not representable by escaping, because the placeholder char and the escape char are the same glyph and the scanner always resolves a run of % as pairs-first. The general case (percent not adjacent to a placeholder, e.g. the '100%%done' example) works, which hides the adjacency bug.",
+    "corrected_rule": "Detect a literal '%' that is adjacent to (immediately following) a placeholder and DO NOT escape it into the format; instead fold it into that placeholder's argument expression, since RAISE arguments are not re-scanned for format chars. e.g. emit RAISE NOTICE '% done', (pct)::text || '%';  (Symmetric case literal-%-then-placeholder, e.g. \"done %#{n}\", is safe because plpgsql's literal-first greedy parse already matches the intended order.)",
+    "severity": "high"
+  },
+  {
+    "area": "RAISE placeholder/USING mapping (Ruby dialect \u2192 plpgsql RAISE)",
+    "ruby": "raise notice: \"r=#{a % b}\"    # and:  raise notice: \"who=#{lookup('bob')}\"",
+    "wrong_output": "RAISE NOTICE 'r=%', a %% b;      -- and:  RAISE NOTICE 'who=%', lookup(''bob'');  (both are plpgsql syntax errors)",
+    "why_wrong": "The '%'->'%%' and '\\''->'\\'\\'' escaping must be applied ONLY to the literal text chunks between interpolations. If it is applied to the whole message string (naive text substitution), it corrupts the interpolation expressions themselves: a modulo operator 'a % b' becomes 'a %% b', and a single-quoted SQL string literal inside an interpolation gets its quotes doubled. Those expressions are emitted verbatim as RAISE arguments and must be untouched.",
+    "corrected_rule": "Escape %->%% and '->'' only within literal text chunks. Each #{expr} is expr-rewritten and emitted as a separate argument with NO %/quote escaping applied to it. This is the same chunk-locality invariant the message text relies on, extended to guarantee interpolation regions are excluded from escaping.",
+    "severity": "high"
+  },
+  {
+    "area": "RAISE placeholder/USING mapping (Ruby dialect \u2192 plpgsql RAISE)",
+    "ruby": "raise exception: \"bad row\", detail: \"value was #{v}\", hint: \"id=#{id}\"",
+    "wrong_output": "RAISE EXCEPTION 'bad row' USING DETAIL = 'value was %', v, HINT = 'id=%', id;   -- garbled/invalid: the % is not a placeholder here and the trailing args have no slot",
+    "why_wrong": "plpgsql does NOT perform %-substitution on USING option values (DETAIL/HINT/COLUMN/CONSTRAINT/ERRCODE/MESSAGE). Those values are ordinary scalar expressions evaluated at runtime; there is no format string and no argument list. Reusing the message's %-placeholder machinery makes the % print literally and leaves the interpolation arguments syntactically stranded (RAISE_OPTION values can't be followed by bare args).",
+    "corrected_rule": "Interpolation inside a USING option value must be lowered to string concatenation, not %-placeholders: USING DETAIL = 'value was ' || (v)::text, HINT = 'id=' || (id)::text. Route option values through the normal double-quoted-string interpolation rewriter (the '|| (e)::text' path), never the RAISE %-sink.",
+    "severity": "high"
+  },
+  {
+    "area": "RAISE placeholder/USING mapping (Ruby dialect \u2192 plpgsql RAISE)",
+    "ruby": "raise exception: \"boom #{id}\", message: \"override\"",
+    "wrong_output": "RAISE EXCEPTION 'boom %', id USING MESSAGE = 'override';   -- ERROR: RAISE option already specified: MESSAGE",
+    "why_wrong": "The digest lists 'message:' as a supported USING option key while ALSO deriving a format string from the positional message. plpgsql forbids supplying both a format string and USING MESSAGE (errcode 42601, 'RAISE option already specified: MESSAGE'); the emitted statement fails to compile.",
+    "corrected_rule": "'message:' is mutually exclusive with a positional message. If a positional message is present, reject 'message:' at CREATE time. If only 'message:' is given (no positional), treat it as THE message and drive it through the format/%-placeholder path (RAISE LEVEL 'fmt', args) rather than USING MESSAGE, so interpolation still works.",
+    "severity": "medium"
+  },
+  {
+    "area": "RAISE placeholder/USING mapping (Ruby dialect \u2192 plpgsql RAISE)",
+    "ruby": "begin\n  perform(\"INSERT ...\")\nrescue => e\n  perform(\"rollback_log()\")\n  raise\nend",
+    "wrong_output": "RAISE EXCEPTION;  (or RAISE EXCEPTION '';)  -- either invalid, or raises a NEW empty exception instead of re-raising",
+    "why_wrong": "The PLX_RAISE surface has no rule for bare 'raise'. In Ruby a bare 'raise' inside a rescue re-raises the current exception. Falling through to the default 'raise \"msg\"->RAISE EXCEPTION' path produces an empty/invalid statement and loses the original SQLSTATE/message. plpgsql's re-raise is bare 'RAISE;', which is legal ONLY inside an EXCEPTION handler.",
+    "corrected_rule": "Map bare 'raise' (no args) to plpgsql 'RAISE;'. Require it to be lexically inside a rescue/EXCEPTION block (track handler depth like loop_depth); outside a handler it is a hard CREATE-time error, mirroring plpgsql's own restriction.",
+    "severity": "medium"
+  },
+  {
+    "area": "RAISE placeholder/USING mapping (Ruby dialect \u2192 plpgsql RAISE)",
+    "ruby": "raise RuntimeError, \"boom #{id}\"    # class not in the PG:: mapping table",
+    "wrong_output": "RAISE EXCEPTION 'boom %', id USING ERRCODE = 'RuntimeError';   -- ERROR: unrecognized exception condition \"runtimeerror\"",
+    "why_wrong": "The rule maps a Ruby exception-class first arg to a condition name via a fixed PG::* table, but does not specify behavior for classes absent from the table (RuntimeError, StandardError, custom classes). Emitting the class name verbatim as an ERRCODE yields an unrecognized-condition error; ERRCODE only accepts known condition names or a 5-char SQLSTATE.",
+    "corrected_rule": "For an exception class not in the mapping table, either (a) reject at CREATE time with a precise 'unsupported exception class' error, or (b) map generic Ruby errors to a defined default (e.g. ERRCODE = 'P0001'/raise_exception). Never pass an unmapped class name through as a condition name.",
+    "severity": "medium"
+  },
+  {
+    "area": "RAISE placeholder/USING mapping (Ruby dialect \u2192 plpgsql RAISE)",
+    "ruby": "raise notice: \"progress 100%\"    # literal percent, no interpolation",
+    "wrong_output": "(correct only if escaping runs even with zero interpolations) RAISE NOTICE 'progress 100%';",
+    "why_wrong": "Edge to verify, not necessarily a bug: if the %-escaping pass is gated on 'message has interpolations', a literal '%' in a no-arg message is left unescaped, and 'RAISE NOTICE 'progress 100%'' fails at runtime with 'too few parameters for RAISE' because the lone % is read as a placeholder with no argument.",
+    "corrected_rule": "Always run literal-%->%% escaping over literal chunks regardless of interpolation count (a message with zero interpolations must still emit '100%%' -> 0 args). Do not condition escaping on the presence of interpolations.",
+    "severity": "low"
+  },
+  {
+    "area": "NULL / three-valued-logic vs Ruby truthiness",
+    "ruby": "if x == nil\n  return 0\nend\nemit if y != nil",
+    "wrong_output": "IF x = NULL THEN\n  RETURN 0;\nEND IF;\n...\nIF y <> NULL THEN RETURN NEXT; END IF;",
+    "why_wrong": "The rewriter applies `==`->`=` and `nil`->`NULL` as two independent token substitutions, producing `x = NULL` / `y <> NULL`. Under SQL three-valued logic ANY comparison with NULL yields NULL, so `x = NULL` is NULL (treated as false) for every x and `y <> NULL` is NULL for every y. The THEN/WHEN branch therefore NEVER fires regardless of the value. The rule set special-cases only `x.nil?`->`x IS NULL`; it does not handle the far more common Ruby spelling `x == nil` / `x != nil`, so naive substitution silently produces always-false conditions.",
+    "corrected_rule": "Before the generic `==`/`!=` rewrite, pattern-match a literal-nil operand: `E == nil` (and `nil == E`) -> `(E) IS NULL`; `E != nil` (and `nil != E`) -> `(E) IS NOT NULL`. This must run at the token level so `E ==\\nnil` / `nil ==E` and the `==`/`nil` substitutions do not race to `= NULL`.",
+    "severity": "high"
+  },
+  {
+    "area": "NULL / three-valued-logic vs Ruby truthiness",
+    "ruby": "skip = true unless active\nnext unless row.flag\nx = 1 while !done",
+    "wrong_output": "IF NOT (active) THEN\n  skip := true;\nEND IF;\nCONTINUE WHEN NOT (row.flag);\nIF NOT (done) THEN x := 1; END IF;   -- (while modifier, negation shown)",
+    "why_wrong": "Ruby falsey = nil OR false; `unless C` runs its body when C is falsey, so `unless nil` RUNS. The rules lower Ruby negation (`unless`, `!x`, `until`) with `NOT (C)`. But `NOT (NULL)` = NULL, which plpgsql treats as false, so on a NULL/absent boolean the body does NOT run. Divergence occurs exactly when the condition is NULL (a nullable boolean column, an unset flag): Ruby executes, plpgsql skips. `NOT (C)` also errors if C is non-boolean.",
+    "corrected_rule": "Lower Ruby negation of a condition as `(C) IS NOT TRUE` (which is TRUE for both FALSE and NULL, matching Ruby falsey), not `NOT (C)`. So `unless C`->`IF (C) IS NOT TRUE THEN`; `next unless C`->`CONTINUE WHEN (C) IS NOT TRUE`; `break unless C`->`EXIT WHEN (C) IS NOT TRUE`; `!x` in boolean position->`(x) IS NOT TRUE`. Positive `if C` is already correct because the THEN arm is skipped on NULL, so only the negated forms need changing.",
+    "severity": "high"
+  },
+  {
+    "area": "NULL / three-valued-logic vs Ruby truthiness",
+    "ruby": "name = input || \"default\"\nx = x || y            # the design's own suggested replacement for rejected ||=\nlabel = user && user.name",
+    "wrong_output": "name := input OR 'default';\nx := x OR y;\nlabel := user AND user.name;",
+    "why_wrong": "Ruby `a || b` and `a && b` are VALUE-returning (a||b = a if truthy else b; the standard nil-default/coalesce and guard idioms), not boolean operators. Lowering `||`->`OR` in a value/RHS slot gives `input OR 'default'`, which requires boolean operands -> invalid plpgsql (`argument of OR must be type boolean`) for text/int, and even for booleans returns TRUE/FALSE instead of the operand value. Critically, the digest REJECTS `||=` and tells users to write `x = x || y` as the fix, but that very lowering is itself broken. `a && b` value use (safe-navigation) breaks the same way.",
+    "corrected_rule": "Only rewrite `||`/`&&`->`OR`/`AND` when the expression is a boolean CONDITION (if/while/ternary test), never in a stored-value/RHS position. In value position lower `a || b`->`COALESCE(a, b)` (Ruby nil-default; document that SQL cannot distinguish a stored FALSE from NULL so `false || b` will not pick b), and for `a && b` value use either reject with a precise message or lower to `CASE WHEN (a) IS NOT TRUE THEN a ELSE b END` when boolean. Position (condition vs value slot) is already known to the emitter, so the split is decidable.",
+    "severity": "high"
+  },
+  {
+    "area": "NULL / three-valued-logic vs Ruby truthiness",
+    "ruby": "msg = \"user=#{uid} name=#{nm}\"   # nm is NULL\nperform(\"UPDATE t SET note = '#{note}' WHERE id = 1\")  # note NULL",
+    "wrong_output": "msg := 'user=' || (uid)::text || ' name=' || (nm)::text;",
+    "why_wrong": "A NULL operand makes `||` yield NULL, so when nm is NULL the ENTIRE msg becomes NULL, not `'user=5 name='`. Ruby `\"#{nil}\"` interpolates to the empty string (nil.to_s == \"\"), so Ruby yields `\"user=5 name=\"`. The current interpolation lowering `'lit' || (e)::text` silently poisons the whole string to NULL on any NULL splice, which then propagates into assignments, later comparisons, and RAISE messages.",
+    "corrected_rule": "Wrap each interpolated chunk to match Ruby nil->\"\": lower `#{e}` in the `||` path to `COALESCE((e)::text, '')`. (In the RAISE path the `%` placeholder already renders NULL as the literal `<NULL>` rather than empty string; document that as a separate, smaller divergence, or COALESCE the RAISE args too for exact parity.)",
+    "severity": "high"
+  },
+  {
+    "area": "NULL / three-valued-logic vs Ruby truthiness",
+    "ruby": "if a == b        # a and b are both nullable columns/vars\n  emit\nend\nreturn if x != y",
+    "wrong_output": "IF a = b THEN RETURN NEXT; END IF;\nIF x <> y THEN RETURN; END IF;",
+    "why_wrong": "Ruby `==`/`!=` are null-safe: `nil == nil`->true, `nil == 5`->false, `5 != nil`->true. SQL `=`/`<>` are NOT null-safe: `NULL = NULL`->NULL(->false, Ruby says true); `5 <> NULL`->NULL(->false, Ruby says true). So whenever either operand is NULL the branch silently takes the wrong path. This is a silent wrong-result, distinct from the literal-nil case: here both sides are arbitrary nullable expressions.",
+    "corrected_rule": "Lower `==`->`IS NOT DISTINCT FROM` and `!=`->`IS DISTINCT FROM` (null-safe, exactly matches Ruby `==`/`!=`). If preserving plain `=`/`<>` for performance, at minimum document that they are correct only when neither operand can be NULL, and combine with the literal-nil special-case (finding 1).",
+    "severity": "medium"
+  },
+  {
+    "area": "NULL / three-valued-logic vs Ruby truthiness",
+    "ruby": "until ready\n  ready = check_ready()  #:: boolean\nend\nprocess while !finished",
+    "wrong_output": "WHILE NOT (ready) LOOP\n  ready := check_ready();\nEND LOOP;\nWHILE NOT (finished) LOOP process; END LOOP;",
+    "why_wrong": "Special case of the negation bug (finding 2) but with loop-termination consequences worth isolating. Ruby `until C` loops WHILE C is falsey, so `until nil` keeps looping. plpgsql `WHILE NOT (NULL)` = `WHILE NULL` -> false -> the loop body never executes (or a `while !C` loop exits when it should continue). A loop meant to spin until a nullable flag becomes true instead never starts, or terminates one iteration too early, when the flag is NULL.",
+    "corrected_rule": "`until C`->`WHILE (C) IS NOT TRUE LOOP`; `STMT while !C`->`WHILE (C) IS NOT TRUE LOOP`. Do not emit `WHILE NOT (C)` for Ruby negated loop conditions.",
+    "severity": "medium"
+  },
+  {
+    "area": "NULL / three-valued-logic vs Ruby truthiness",
+    "ruby": "r = fetch_one(\"SELECT id, name FROM t WHERE id = #{k}\")\nreturn 0 if r.nil?",
+    "wrong_output": "SELECT * INTO r FROM (SELECT id, name FROM t WHERE id = k) AS __plx_fo_1;\nIF r IS NULL THEN RETURN 0; END IF;",
+    "why_wrong": "Ruby `.nil?` on a fetch result means 'no row was returned'. But `r IS NULL` on a RECORD is TRUE only when EVERY column is NULL. It works by accident for non-strict fetch_one (0 rows sets all columns NULL), yet (a) a genuine row whose columns are all NULL is misreported as 'no row', and (b) for a multi-column record a single NULL column does not make `r IS NULL` true. Row-PRESENCE and value-nullness are conflated, giving silent wrong results at the boundary.",
+    "corrected_rule": "Lower `<fetch-target>.nil?` (presence test on a fetch_one target) to `NOT FOUND`, evaluated immediately after the generated SELECT/EXECUTE ... INTO. Reserve `IS NULL` for genuine scalar nullness. Document FOUND as the row-presence primitive (the digest already hints at this but keeps `IS NULL` as the primary lowering).",
+    "severity": "medium"
+  },
+  {
+    "area": "NULL / three-valued-logic vs Ruby truthiness",
+    "ruby": "next unless ids.include?(uid)   # uid may be NULL, or ids may contain NULL\nif !tags.include?(t)\n  emit\nend",
+    "wrong_output": "CONTINUE WHEN NOT (uid = ANY(ids));\nIF NOT (t = ANY(tags)) THEN RETURN NEXT; END IF;",
+    "why_wrong": "`x = ANY(arr)` returns NULL (not FALSE) when x is NULL, or when arr contains a NULL and no positive match is found. `NOT (NULL)` = NULL -> treated as false, so the negated-membership branch is silently dropped. Ruby `include?` returns a real boolean via `==`, so `!ids.include?(nil)`->true and `![1,nil].include?(2)`->true. Under negation the NULL-poisoned ANY diverges from Ruby exactly on NULL elements/targets.",
+    "corrected_rule": "Route negated membership through the IS-NOT-TRUE rule: `!arr.include?(x)`->`(x = ANY(arr)) IS NOT TRUE` so a NULL/uncertain membership counts as 'not included', matching Ruby. Generally, any negation of a rewritten predicate (finding 2) must use IS NOT TRUE, not NOT(...).",
+    "severity": "medium"
+  },
+  {
+    "area": "NULL / three-valued-logic vs Ruby truthiness",
+    "ruby": "if rows_affected      # an integer\n  emit\nend\nreturn unless result   # result is text/record",
+    "wrong_output": "IF rows_affected THEN RETURN NEXT; END IF;\nIF NOT (result) THEN RETURN; END IF;",
+    "why_wrong": "Ruby treats every non-nil/non-false value as truthy, including 0, \"\", and [] (all truthy). The design does no truthiness coercion, so a bare non-boolean condition passes through as `IF <integer>`/`NOT (<text>)`, which is invalid plpgsql (`argument of IF/NOT must be type boolean`). This surfaces as an opaque plpgsql compile error at CREATE time rather than a crisp plruby error, and the user cannot get Ruby semantics anyway because 0/\"\"/[] being truthy is unrepresentable by any single SQL coercion (so silently coercing to `<> 0` / `IS NOT NULL` would ALSO be wrong).",
+    "corrected_rule": "Detect a non-boolean condition at CREATE time and reject with a precise plruby error: 'condition must be a boolean expression; Ruby truthiness is not emulated (0, \"\", [] are truthy in Ruby) - write an explicit comparison such as x != 0 or !x.nil?'. Do not pass `IF x` / `NOT (x)` through to plpgsql, and document the non-coercion divergence explicitly.",
+    "severity": "low"
+  }
+]

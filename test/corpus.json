@@ -1,0 +1,301 @@
+{
+  "cases": [
+    {
+      "id": "scalar-return-arith",
+      "category": "return-arith",
+      "description": "Explicit scalar return of an arithmetic expression over args; no locals, no DECLARE. Confirms args pass through by name and SQL operator precedence is untouched.",
+      "ruby_create": "CREATE FUNCTION plx_add(a int, b int) RETURNS int\nLANGUAGE plxruby AS $$\nreturn a + b * 2\n$$;",
+      "expected_plpgsql_body": "BEGIN\n  RETURN a + b * 2;\nEND;",
+      "test_sql": "SELECT plx_add(3, 4) AS r;",
+      "expected_output": " r  \n----\n 11\n(1 row)"
+    },
+    {
+      "id": "interp-return-value",
+      "category": "interp",
+      "description": "String interpolation in a returned value: local inferred text (from string literal), interpolation lowered to || with ::text cast, trailing literal chunk preserved. RHS is not a constant literal so no init-fold.",
+      "ruby_create": "CREATE FUNCTION plx_greet(name text) RETURNS text\nLANGUAGE plxruby AS $$\ngreeting = \"Hello, #{name}!\"\nreturn greeting\n$$;",
+      "expected_plpgsql_body": "DECLARE\n  greeting text;\nBEGIN\n  greeting := 'Hello, ' || (name)::text || '!';\n  RETURN greeting;\nEND;",
+      "test_sql": "SELECT plx_greet('World') AS r;",
+      "expected_output": "       r       \n---------------\n Hello, World!\n(1 row)"
+    },
+    {
+      "id": "if-elsif-else",
+      "category": "if-elsif",
+      "description": "if/elsif/else chain with explicit text annotation on a branch-assigned local (declared once, no fold). >= comparisons pass through; openers end in THEN, closer END IF.",
+      "ruby_create": "CREATE FUNCTION plx_grade(score int) RETURNS text\nLANGUAGE plxruby AS $$\ngrade #:: text\nif score >= 90\n  grade = \"A\"\nelsif score >= 80\n  grade = \"B\"\nelse\n  grade = \"F\"\nend\nreturn grade\n$$;",
+      "expected_plpgsql_body": "DECLARE\n  grade text;\nBEGIN\n  IF score >= 90 THEN\n    grade := 'A';\n  ELSIF score >= 80 THEN\n    grade := 'B';\n  ELSE\n    grade := 'F';\n  END IF;\n  RETURN grade;\nEND;",
+      "test_sql": "SELECT plx_grade(85) AS r;",
+      "expected_output": " r \n---\n B\n(1 row)"
+    },
+    {
+      "id": "unless-block-and-eq",
+      "category": "unless-block",
+      "description": "Block-form unless lowering to IF NOT (cond) with the condition parenthesized; exercises && -> AND and == -> = together. status inferred text and init-folded (top-level, first-reference, string literal).",
+      "ruby_create": "CREATE FUNCTION plx_access(active boolean, role text) RETURNS text\nLANGUAGE plxruby AS $$\nstatus = \"ok\"\nunless active && role == \"admin\"\n  status = \"denied\"\nend\nreturn status\n$$;",
+      "expected_plpgsql_body": "DECLARE\n  status text := 'ok';\nBEGIN\n  IF NOT (active AND role = 'admin') THEN\n    status := 'denied';\n  END IF;\n  RETURN status;\nEND;",
+      "test_sql": "SELECT plx_access(true, 'guest') AS r;",
+      "expected_output": "   r    \n--------\n denied\n(1 row)"
+    },
+    {
+      "id": "unless-modifier-neq",
+      "category": "unless-modifier",
+      "description": "Modifier unless on a return statement, plus != -> <>. Modifier expands to IF NOT (cond) THEN <stmt>; END IF; no frame pushed.",
+      "ruby_create": "CREATE FUNCTION plx_zcheck(n int) RETURNS text\nLANGUAGE plxruby AS $$\nreturn \"empty\" unless n != 0\nreturn \"nonzero\"\n$$;",
+      "expected_plpgsql_body": "BEGIN\n  IF NOT (n <> 0) THEN\n    RETURN 'empty';\n  END IF;\n  RETURN 'nonzero';\nEND;",
+      "test_sql": "SELECT plx_zcheck(0) AS r;",
+      "expected_output": "   r   \n-------\n empty\n(1 row)"
+    },
+    {
+      "id": "for-next-break",
+      "category": "for-next-break",
+      "description": "Integer for over 1..n with modifier next-if and break-if lowering to CONTINUE WHEN / EXIT WHEN. Loop var i is plpgsql-implicit (not hoisted); total inferred integer and init-folded.",
+      "ruby_create": "CREATE FUNCTION plx_sum_skip(n int) RETURNS int\nLANGUAGE plxruby AS $$\ntotal = 0\nfor i in 1..n\n  next if i == 3\n  break if i > 7\n  total = total + i\nend\nreturn total\n$$;",
+      "expected_plpgsql_body": "DECLARE\n  total integer := 0;\nBEGIN\n  FOR i IN 1..n LOOP\n    CONTINUE WHEN i = 3;\n    EXIT WHEN i > 7;\n    total := total + i;\n  END LOOP;\n  RETURN total;\nEND;",
+      "test_sql": "SELECT plx_sum_skip(10) AS r;",
+      "expected_output": " r  \n----\n 25\n(1 row)"
+    },
+    {
+      "id": "each-exclusive-range",
+      "category": "each-range",
+      "description": "(LO...HI).each do |j| block form with an EXCLUSIVE range: lowers to FOR j IN LO..(HI - 1) LOOP. s inferred integer and init-folded.",
+      "ruby_create": "CREATE FUNCTION plx_exsum(n int) RETURNS int\nLANGUAGE plxruby AS $$\ns = 0\n(0...n).each do |j|\n  s = s + j\nend\nreturn s\n$$;",
+      "expected_plpgsql_body": "DECLARE\n  s integer := 0;\nBEGIN\n  FOR j IN 0..(n - 1) LOOP\n    s := s + j;\n  END LOOP;\n  RETURN s;\nEND;",
+      "test_sql": "SELECT plx_exsum(5) AS r;",
+      "expected_output": " r  \n----\n 10\n(1 row)"
+    },
+    {
+      "id": "ternary-return",
+      "category": "ternary",
+      "description": "Ternary C ? A : B in a returned expression lowering to CASE WHEN C THEN A ELSE B END; >= comparison passes through.",
+      "ruby_create": "CREATE FUNCTION plx_sign(x int) RETURNS text\nLANGUAGE plxruby AS $$\nreturn x >= 0 ? \"nonneg\" : \"neg\"\n$$;",
+      "expected_plpgsql_body": "BEGIN\n  RETURN CASE WHEN x >= 0 THEN 'nonneg' ELSE 'neg' END;\nEND;",
+      "test_sql": "SELECT plx_sign(-4) AS r;",
+      "expected_output": "  r  \n-----\n neg\n(1 row)"
+    },
+    {
+      "id": "raise-notice-interp",
+      "category": "raise-notice",
+      "description": "raise notice: with interpolation -> RAISE NOTICE with % placeholder and ordered arg; a literal % in the message is escaped to %%. Followed by a scalar return.",
+      "ruby_create": "CREATE FUNCTION plx_note(id int) RETURNS int\nLANGUAGE plxruby AS $$\nraise notice: \"processing id #{id} at 50%done\"\nreturn id * 10\n$$;",
+      "expected_plpgsql_body": "BEGIN\n  RAISE NOTICE 'processing id % at 50%%done', id;\n  RETURN id * 10;\nEND;",
+      "test_sql": "SELECT plx_note(7) AS r;",
+      "expected_output": "NOTICE:  processing id 7 at 50%done\n r  \n----\n 70\n(1 row)"
+    },
+    {
+      "id": "raise-exception-errcode",
+      "category": "raise-exception",
+      "description": "Conditional raise exception: with interpolation and an errcode: option -> RAISE EXCEPTION '...' , arg USING ERRCODE = '...'. Test drives the failing path so psql prints the ERROR.",
+      "ruby_create": "CREATE FUNCTION plx_checkpos(v int) RETURNS int\nLANGUAGE plxruby AS $$\nif v < 0\n  raise exception: \"negative: #{v}\", errcode: \"22023\"\nend\nreturn v\n$$;",
+      "expected_plpgsql_body": "BEGIN\n  IF v < 0 THEN\n    RAISE EXCEPTION 'negative: %', v USING ERRCODE = '22023';\n  END IF;\n  RETURN v;\nEND;",
+      "test_sql": "SELECT plx_checkpos(-3) AS r;",
+      "expected_output": "ERROR:  negative: -3\nCONTEXT:  PL/pgSQL function plx_checkpos(integer) line 4 at RAISE"
+    },
+    {
+      "id": "annotation-numeric",
+      "category": "annotation",
+      "description": "Explicit numeric type annotations: trailing `#:: numeric` on a first constant assignment folds into the DECLARE init; standalone `amount #:: numeric` declares without init (RHS is an expression). Return interpolates the numeric via ::text.",
+      "ruby_create": "CREATE FUNCTION plx_interest(principal numeric) RETURNS text\nLANGUAGE plxruby AS $$\nrate = 0.05 #:: numeric\namount #:: numeric\namount = principal * rate\nreturn \"interest: #{amount}\"\n$$;",
+      "expected_plpgsql_body": "DECLARE\n  rate numeric := 0.05;\n  amount numeric;\nBEGIN\n  amount := principal * rate;\n  RETURN 'interest: ' || (amount)::text;\nEND;",
+      "test_sql": "SELECT plx_interest(1000) AS r;",
+      "expected_output": "        r        \n-----------------\n interest: 50.00\n(1 row)"
+    },
+    {
+      "id": "decl-infer-multi",
+      "category": "decl-infer",
+      "description": "Literal type inference across three locals (string->text, int->integer, true/false->boolean), each top-level/first-reference/constant so all init-fold into the DECLARE. Return builds a multi-interpolation string; a leading empty chunk drops (lone #{label} -> (label)::text).",
+      "ruby_create": "CREATE FUNCTION plx_fmt() RETURNS text\nLANGUAGE plxruby AS $$\nlabel = \"count\"\nn = 42\nactive = true\nreturn \"#{label}=#{n} active=#{active}\"\n$$;",
+      "expected_plpgsql_body": "DECLARE\n  label text := 'count';\n  n integer := 42;\n  active boolean := true;\nBEGIN\n  RETURN (label)::text || '=' || (n)::text || ' active=' || (active)::text;\nEND;",
+      "test_sql": "SELECT plx_fmt() AS r;",
+      "expected_output": "          r           \n----------------------\n count=42 active=true\n(1 row)"
+    },
+    {
+      "id": "until-loop",
+      "category": "until-loop",
+      "description": "until loop -> WHILE NOT (cond) LOOP with the condition parenthesized; two locals inferred integer and init-folded.",
+      "ruby_create": "CREATE FUNCTION plx_until_sum(n int) RETURNS int\nLANGUAGE plxruby AS $$\ni = 0\ncount = 0\nuntil i >= n\n  count = count + i\n  i = i + 1\nend\nreturn count\n$$;",
+      "expected_plpgsql_body": "DECLARE\n  i integer := 0;\n  count integer := 0;\nBEGIN\n  WHILE NOT (i >= n) LOOP\n    count := count + i;\n    i := i + 1;\n  END LOOP;\n  RETURN count;\nEND;",
+      "test_sql": "SELECT plx_until_sum(5) AS r;",
+      "expected_output": " r  \n----\n 10\n(1 row)"
+    },
+    {
+      "id": "setof-emit",
+      "category": "setof-emit",
+      "description": "SETOF via RETURNS TABLE + emit -> RETURN NEXT. TABLE columns idx/label are params (assigned with :=, never hoisted); integer for var i is implicit. No DECLARE section is emitted.",
+      "ruby_create": "CREATE FUNCTION plx_rows(n int) RETURNS TABLE(idx int, label text)\nLANGUAGE plxruby AS $$\nfor i in 1..n\n  idx = i\n  label = \"row#{i}\"\n  emit\nend\n$$;",
+      "expected_plpgsql_body": "BEGIN\n  FOR i IN 1..n LOOP\n    idx := i;\n    label := 'row' || (i)::text;\n    RETURN NEXT;\n  END LOOP;\nEND;",
+      "test_sql": "SELECT * FROM plx_rows(3);",
+      "expected_output": " idx | label \n-----+-------\n   1 | row1\n   2 | row2\n   3 | row3\n(3 rows)"
+    },
+    {
+      "id": "begin-rescue",
+      "category": "begin-rescue",
+      "description": "begin/rescue => e without ensure -> nested BEGIN/EXCEPTION WHEN OTHERS; e.message rewrites to SQLERRM. Division by zero is caught, a notice raised, and a fallback value returned.",
+      "ruby_create": "CREATE FUNCTION plx_safediv(d int) RETURNS int\nLANGUAGE plxruby AS $$\nbegin\n  return 100 / d\nrescue => e\n  raise notice: \"caught: #{e.message}\"\n  return -1\nend\n$$;",
+      "expected_plpgsql_body": "BEGIN\n  BEGIN\n    RETURN 100 / d;\n  EXCEPTION\n    WHEN OTHERS THEN\n      RAISE NOTICE 'caught: %', SQLERRM;\n      RETURN -1;\n  END;\nEND;",
+      "test_sql": "SELECT plx_safediv(0) AS r;",
+      "expected_output": "NOTICE:  caught: division by zero\n r  \n----\n -1\n(1 row)"
+    },
+    {
+      "id": "query-for-sum",
+      "category": "query-for",
+      "description": "query(...).each do |row| iterating a static SELECT, summing a record field into a hoisted local; static interpolation #{g} lowers to a bare name reference.",
+      "ruby_create": "CREATE FUNCTION c1(g int) RETURNS bigint LANGUAGE plxruby AS $$\ntotal = 0  #:: bigint\nquery(\"SELECT amount FROM orders WHERE grp = #{g}\").each do |row|\n  total = total + row.amount\nend\nreturn total\n$$;",
+      "expected_plpgsql_body": "DECLARE\n  row RECORD;\n  total bigint := 0;\nBEGIN\n  FOR row IN SELECT amount FROM orders WHERE grp = g LOOP\n    total := total + row.amount;\n  END LOOP;\n  RETURN total;\nEND;",
+      "test_sql": "CREATE TEMP TABLE orders(grp int, id int, amount bigint);\nINSERT INTO orders VALUES (1,1,10),(1,2,20),(1,3,30),(2,9,5);\nSELECT c1(1);",
+      "expected_output": " c1 \n----\n 60\n(1 row)"
+    },
+    {
+      "id": "fetch-one-row",
+      "category": "fetch-one",
+      "description": "row = fetch_one(SELECT) lowers to SELECT * INTO <record> FROM (<user sql>) AS __plx_fo_1; whole-row target hoists RECORD; field access after.",
+      "ruby_create": "CREATE FUNCTION c2(uid int) RETURNS text LANGUAGE plxruby AS $$\nu = fetch_one(\"SELECT id, name FROM users WHERE id = #{uid}\")\nreturn u.name\n$$;",
+      "expected_plpgsql_body": "DECLARE\n  u RECORD;\nBEGIN\n  SELECT * INTO u FROM (SELECT id, name FROM users WHERE id = uid) AS __plx_fo_1;\n  RETURN u.name;\nEND;",
+      "test_sql": "CREATE TEMP TABLE users(id int, name text);\nINSERT INTO users VALUES (1,'Alice'),(2,'Bob'),(3,'Carol');\nSELECT c2(2);",
+      "expected_output": " c2  \n-----\n Bob\n(1 row)"
+    },
+    {
+      "id": "perform-dml-and-rowreturning",
+      "category": "perform",
+      "description": "perform(...) with a static DML string is emitted verbatim; perform of a row-returning SELECT becomes PERFORM * FROM (<sql>) AS __plx_p_1; result discarded.",
+      "ruby_create": "CREATE FUNCTION c4(cid int) RETURNS void LANGUAGE plxruby AS $$\nperform(\"UPDATE counters SET n = n + 1 WHERE id = #{cid}\")\nperform(\"SELECT count(*) FROM counters\")\nreturn\n$$;",
+      "expected_plpgsql_body": "BEGIN\n  UPDATE counters SET n = n + 1 WHERE id = cid;\n  PERFORM * FROM (SELECT count(*) FROM counters) AS __plx_p_1;\nEND;",
+      "test_sql": "CREATE TEMP TABLE counters(id int, n int);\nINSERT INTO counters VALUES (1,5);\nSELECT c4(1);\nSELECT n FROM counters WHERE id = 1;",
+      "expected_output": " c4 \n----\n \n(1 row)\n\n n \n---\n 6\n(1 row)"
+    },
+    {
+      "id": "execute-dynamic-interp-using",
+      "category": "execute-dynamic",
+      "description": "execute(expr, bind) is always dynamic; interpolation #{tbl} becomes runtime string concatenation || (tbl)::text and the extra arg becomes USING.",
+      "ruby_create": "CREATE FUNCTION c5(tbl text, note text) RETURNS void LANGUAGE plxruby AS $$\nexecute(\"INSERT INTO #{tbl}(msg) VALUES ($1)\", note)\nreturn\n$$;",
+      "expected_plpgsql_body": "BEGIN\n  EXECUTE 'INSERT INTO ' || (tbl)::text || '(msg) VALUES ($1)' USING note;\nEND;",
+      "test_sql": "CREATE TEMP TABLE aud(msg text);\nSELECT c5('aud','hello');\nSELECT msg FROM aud;",
+      "expected_output": " c5 \n----\n \n(1 row)\n\n  msg  \n-------\n hello\n(1 row)"
+    },
+    {
+      "id": "setof-emit-returns-table",
+      "category": "setof-emit",
+      "description": "RETURNS TABLE(cust_id,total) with query iteration; TABLE columns are params (not hoisted), emit lowers to RETURN NEXT.",
+      "ruby_create": "CREATE FUNCTION c6() RETURNS TABLE(cust_id int, total bigint) LANGUAGE plxruby AS $$\nquery(\"SELECT id, amount FROM orders WHERE grp = 1 ORDER BY id\").each do |row|\n  cust_id = row.id\n  total = row.amount * 2\n  emit\nend\n$$;",
+      "expected_plpgsql_body": "DECLARE\n  row RECORD;\nBEGIN\n  FOR row IN SELECT id, amount FROM orders WHERE grp = 1 ORDER BY id LOOP\n    cust_id := row.id;\n    total := row.amount * 2;\n    RETURN NEXT;\n  END LOOP;\nEND;",
+      "test_sql": "CREATE TEMP TABLE orders(grp int, id int, amount bigint);\nINSERT INTO orders VALUES (1,1,10),(1,2,20),(1,3,30);\nSELECT * FROM c6();",
+      "expected_output": " cust_id | total \n---------+-------\n       1 |    20\n       2 |    40\n       3 |    60\n(3 rows)"
+    },
+    {
+      "id": "setof-return-next-expr",
+      "category": "setof-return-next",
+      "description": "RETURNS SETOF int with an integer for-loop; return_next e lowers to RETURN NEXT e; trailing bare return -> RETURN;.",
+      "ruby_create": "CREATE FUNCTION c7(n int) RETURNS SETOF int LANGUAGE plxruby AS $$\nfor i in 1..n\n  return_next i * i\nend\nreturn\n$$;",
+      "expected_plpgsql_body": "BEGIN\n  FOR i IN 1..n LOOP\n    RETURN NEXT i * i;\n  END LOOP;\n  RETURN;\nEND;",
+      "test_sql": "SELECT * FROM c7(3);",
+      "expected_output": " c7 \n----\n  1\n  4\n  9\n(3 rows)"
+    },
+    {
+      "id": "return-query-static",
+      "category": "return-query",
+      "description": "return_query(static SELECT) lowers to RETURN QUERY <sql> in a SETOF function.",
+      "ruby_create": "CREATE FUNCTION c8() RETURNS SETOF int LANGUAGE plxruby AS $$\nreturn_query(\"SELECT id FROM vip ORDER BY id\")\n$$;",
+      "expected_plpgsql_body": "BEGIN\n  RETURN QUERY SELECT id FROM vip ORDER BY id;\nEND;",
+      "test_sql": "CREATE TEMP TABLE vip(id int);\nINSERT INTO vip VALUES (3),(1),(2);\nSELECT * FROM c8();",
+      "expected_output": " c8 \n----\n  1\n  2\n  3\n(3 rows)"
+    },
+    {
+      "id": "record-field-subscript-normalize",
+      "category": "record-field",
+      "description": "Record field access via row[:id] and row['name'] both normalize to row.id / row.name; raise notice interpolation -> RAISE NOTICE '%'.",
+      "ruby_create": "CREATE FUNCTION c9() RETURNS void LANGUAGE plxruby AS $$\nquery(\"SELECT id, name FROM users ORDER BY id\").each do |r|\n  raise notice: \"user #{r[:id]}: #{r['name']}\"\nend\nreturn\n$$;",
+      "expected_plpgsql_body": "DECLARE\n  r RECORD;\nBEGIN\n  FOR r IN SELECT id, name FROM users ORDER BY id LOOP\n    RAISE NOTICE 'user %: %', r.id, r.name;\n  END LOOP;\nEND;",
+      "test_sql": "CREATE TEMP TABLE users(id int, name text);\nINSERT INTO users VALUES (1,'Alice'),(2,'Bob'),(3,'Carol');\nSELECT c9();",
+      "expected_output": "NOTICE:  user 1: Alice\nNOTICE:  user 2: Bob\nNOTICE:  user 3: Carol\n c9 \n----\n \n(1 row)"
+    },
+    {
+      "id": "begin-rescue-unique-violation",
+      "category": "begin-rescue",
+      "description": "begin/rescue with a Ruby exception class mapping (PG::UniqueViolation -> unique_violation) and e.message -> SQLERRM; local first assigned inside begin still hoisted to outer DECLARE (no init fold, := kept).",
+      "ruby_create": "CREATE FUNCTION c10(k int) RETURNS boolean LANGUAGE plxruby AS $$\nbegin\n  execute(\"INSERT INTO uniq(id) VALUES ($1)\", k)\n  ok = true  #:: boolean\nrescue PG::UniqueViolation => e\n  ok = false\n  raise notice: \"dup #{k}: #{e.message}\"\nend\nreturn ok\n$$;",
+      "expected_plpgsql_body": "DECLARE\n  ok boolean;\nBEGIN\n  BEGIN\n    EXECUTE 'INSERT INTO uniq(id) VALUES ($1)' USING k;\n    ok := true;\n  EXCEPTION\n    WHEN unique_violation THEN\n      ok := false;\n      RAISE NOTICE 'dup %: %', k, SQLERRM;\n  END;\n  RETURN ok;\nEND;",
+      "test_sql": "CREATE TEMP TABLE uniq(id int PRIMARY KEY);\nINSERT INTO uniq VALUES (1);\nSELECT c10(1);\nSELECT c10(2);",
+      "expected_output": "NOTICE:  dup 1: duplicate key value violates unique constraint \"uniq_pkey\"\n c10 \n-----\n f\n(1 row)\n\n c10 \n-----\n t\n(1 row)"
+    },
+    {
+      "id": "begin-rescue-ensure-doublenest",
+      "category": "begin-rescue-ensure",
+      "description": "begin/rescue/ensure lowers to the double-nested BEGIN/EXCEPTION pattern so the ensure body runs exactly once on both the normal/handled and the propagate path.",
+      "ruby_create": "CREATE FUNCTION c11(k int) RETURNS void LANGUAGE plxruby AS $$\nbegin\n  perform(\"INSERT INTO t2 VALUES (#{k})\")\nrescue => e\n  raise notice: \"failed: #{e.message}\"\nensure\n  perform(\"INSERT INTO log2(msg) VALUES ('done')\")\nend\nreturn\n$$;",
+      "expected_plpgsql_body": "BEGIN\n  BEGIN\n    INSERT INTO t2 VALUES (k);\n  EXCEPTION\n    WHEN OTHERS THEN\n      RAISE NOTICE 'failed: %', SQLERRM;\n  END;\n  INSERT INTO log2(msg) VALUES ('done');\nEXCEPTION WHEN OTHERS THEN\n  INSERT INTO log2(msg) VALUES ('done');\n  RAISE;\nEND;",
+      "test_sql": "CREATE TEMP TABLE t2(x int);\nCREATE TEMP TABLE log2(msg text);\nSELECT c11(5);\nSELECT x FROM t2;\nSELECT msg FROM log2;",
+      "expected_output": " c11 \n-----\n \n(1 row)\n\n x \n---\n 5\n(1 row)\n\n msg  \n------\n done\n(1 row)"
+    },
+    {
+      "id": "for-int-next-if-modifier",
+      "category": "for-next",
+      "description": "Integer for i in 1..n (loop var not hoisted, plpgsql auto-declares it) with modifier next if -> CONTINUE WHEN; top-level literal init folded into DECLARE.",
+      "ruby_create": "CREATE FUNCTION c12(n int) RETURNS int LANGUAGE plxruby AS $$\ns = 0  #:: int\nfor i in 1..n\n  next if i == 3\n  s = s + i\nend\nreturn s\n$$;",
+      "expected_plpgsql_body": "DECLARE\n  s int := 0;\nBEGIN\n  FOR i IN 1..n LOOP\n    CONTINUE WHEN i = 3;\n    s := s + i;\n  END LOOP;\n  RETURN s;\nEND;",
+      "test_sql": "SELECT c12(5);",
+      "expected_output": " c12 \n-----\n  12\n(1 row)"
+    },
+    {
+      "id": "if-elsif-else-operators",
+      "category": "if-elsif",
+      "description": "if/elsif/else with rewritten operators (&& -> AND, || -> OR, == -> =); conditions are boolean SQL, no truthiness coercion.",
+      "ruby_create": "CREATE FUNCTION c13(score int, bonus boolean, override boolean) RETURNS text LANGUAGE plxruby AS $$\nif score >= 90 && bonus\n  return 'A'\nelsif score >= 80 || override\n  return 'B'\nelse\n  return 'F'\nend\n$$;",
+      "expected_plpgsql_body": "BEGIN\n  IF score >= 90 AND bonus THEN\n    RETURN 'A';\n  ELSIF score >= 80 OR override THEN\n    RETURN 'B';\n  ELSE\n    RETURN 'F';\n  END IF;\nEND;",
+      "test_sql": "SELECT c13(95,true,false) AS a, c13(70,false,true) AS b, c13(50,false,false) AS c;",
+      "expected_output": " a | b | c \n---+---+---\n A | B | F\n(1 row)"
+    },
+    {
+      "id": "until-loop-break-if-compound",
+      "category": "while-until",
+      "description": "until C -> WHILE NOT (C) LOOP; compound assign += -> := x + (..); modifier break if -> EXIT WHEN.",
+      "ruby_create": "CREATE FUNCTION c14(n int) RETURNS int LANGUAGE plxruby AS $$\nstep = 0  #:: int\nuntil step >= n\n  step += 1\n  break if step > 100\nend\nreturn step\n$$;",
+      "expected_plpgsql_body": "DECLARE\n  step int := 0;\nBEGIN\n  WHILE NOT (step >= n) LOOP\n    step := step + 1;\n    EXIT WHEN step > 100;\n  END LOOP;\n  RETURN step;\nEND;",
+      "test_sql": "SELECT c14(5);",
+      "expected_output": " c14 \n-----\n   5\n(1 row)"
+    },
+    {
+      "id": "raise-notice-percent-ternary",
+      "category": "raise-interp",
+      "description": "raise notice: with interpolation -> % placeholders + arg list, literal % escaped to %%; ternary ?: -> CASE WHEN ... END; annotated locals.",
+      "ruby_create": "CREATE FUNCTION c15(done int, total int) RETURNS text LANGUAGE plxruby AS $$\npct = done * 100 / total  #:: int\nlabel = done == total ? \"complete\" : \"partial\"  #:: text\nraise notice: \"50% checkpoint at #{pct} (#{label})\"\nreturn label\n$$;",
+      "expected_plpgsql_body": "DECLARE\n  pct int;\n  label text;\nBEGIN\n  pct := done * 100 / total;\n  label := CASE WHEN done = total THEN 'complete' ELSE 'partial' END;\n  RAISE NOTICE '50%% checkpoint at % (%)', pct, label;\n  RETURN label;\nEND;",
+      "test_sql": "SELECT c15(3,10);",
+      "expected_output": "NOTICE:  50% checkpoint at 30 (partial)\n   c15   \n---------\n partial\n(1 row)"
+    },
+    {
+      "id": "each-with-index",
+      "category": "each-with-index",
+      "description": ".each_with_index hoists idx integer and row RECORD, emits idx := -1 before the FOR and injects idx := idx + 1 as the first body statement (0-based).",
+      "ruby_create": "CREATE FUNCTION c16() RETURNS void LANGUAGE plxruby AS $$\nquery(\"SELECT name FROM users ORDER BY id\").each_with_index do |row, idx|\n  raise notice: \"#{idx}: #{row.name}\"\nend\nreturn\n$$;",
+      "expected_plpgsql_body": "DECLARE\n  row RECORD;\n  idx integer;\nBEGIN\n  idx := -1;\n  FOR row IN SELECT name FROM users ORDER BY id LOOP\n    idx := idx + 1;\n    RAISE NOTICE '%: %', idx, row.name;\n  END LOOP;\nEND;",
+      "test_sql": "CREATE TEMP TABLE users(id int, name text);\nINSERT INTO users VALUES (1,'Alice'),(2,'Bob'),(3,'Carol');\nSELECT c16();",
+      "expected_output": "NOTICE:  0: Alice\nNOTICE:  1: Bob\nNOTICE:  2: Carol\n c16 \n-----\n \n(1 row)"
+    },
+    {
+      "id": "reject-case-when",
+      "category": "reject-out-of-subset",
+      "description": "case/when is out of the M3 subset and must be rejected at CREATE time with a FEATURE_NOT_SUPPORTED ereport (no plpgsql body is produced).",
+      "ruby_create": "CREATE FUNCTION e_case(x int) RETURNS text LANGUAGE plxruby AS $$\ncase x\nwhen 1\n  return 'one'\nelse\n  return 'other'\nend\n$$;",
+      "expected_plpgsql_body": "-- none: transpile aborts at CREATE time; ereport(ERROR, errcode(ERRCODE_FEATURE_NOT_SUPPORTED)); no prosrc rewritten",
+      "test_sql": "CREATE FUNCTION e_case(x int) RETURNS text LANGUAGE plxruby AS $$\ncase x\nwhen 1\n  return 'one'\nelse\n  return 'other'\nend\n$$;",
+      "expected_output": "ERROR:  plxruby: case/when is not supported (out of the M3 subset)"
+    },
+    {
+      "id": "reject-nested-def",
+      "category": "reject-out-of-subset",
+      "description": "A nested `def` (function definition) anywhere in the body is a hard out-of-subset error rejected at CREATE time.",
+      "ruby_create": "CREATE FUNCTION e_def(x int) RETURNS int LANGUAGE plxruby AS $$\ndef helper(a)\n  return a + 1\nend\nreturn helper(x)\n$$;",
+      "expected_plpgsql_body": "-- none: transpile aborts at CREATE time; ereport(ERROR, errcode(ERRCODE_FEATURE_NOT_SUPPORTED)); no prosrc rewritten",
+      "test_sql": "CREATE FUNCTION e_def(x int) RETURNS int LANGUAGE plxruby AS $$\ndef helper(a)\n  return a + 1\nend\nreturn helper(x)\n$$;",
+      "expected_output": "ERROR:  plxruby: 'def' (nested function definition) is not supported"
+    },
+    {
+      "id": "reject-uninferable-local",
+      "category": "reject-type-inference",
+      "description": "A local whose first assignment RHS is a plain function call (no annotation, no literal/cast/fetch_one) cannot be typed and is rejected at CREATE time naming the var and its line.",
+      "ruby_create": "CREATE FUNCTION e_infer(x int) RETURNS text LANGUAGE plxruby AS $$\nlabel = compute_thing(x)\nreturn label\n$$;",
+      "expected_plpgsql_body": "-- none: transpile aborts at CREATE time; ereport(ERROR) demanding a #:: annotation; no prosrc rewritten",
+      "test_sql": "CREATE FUNCTION e_infer(x int) RETURNS text LANGUAGE plxruby AS $$\nlabel = compute_thing(x)\nreturn label\n$$;",
+      "expected_output": "ERROR:  plxruby: cannot infer a PostgreSQL type for local variable \"label\" (first assigned at line 1); add an annotation, e.g. label = ... #:: text"
+    }
+  ]
+}

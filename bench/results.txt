@@ -1,0 +1,14 @@
+plx benchmark  (PostgreSQL 18.4, 8 vCPU / 8 GiB, Ubuntu 26.04)
+arithmetic: accumulate 1..2000000    iteration: sum 1000000 rows    min of 5 runs
+
+language         | arithmetic         | iteration          | ok
+----------------------------------------------------------------
+plpgsql          | 48.0 ms (1.00x)    | 92.0 ms (1.00x)    | ok
+plxruby          | 50.8 ms (1.06x)    | 92.6 ms (1.01x)    | ok
+plxphp           | 51.0 ms (1.06x)    | 93.8 ms (1.02x)    | ok
+plruby (native)  | 94.0 ms (1.96x)    | 373.4 ms (4.06x)   | ok
+plphp (native)   | 49.3 ms (1.03x)    | 245.0 ms (2.66x)   | ok
+plperl           | 43.3 ms (0.90x)    | 499.2 ms (5.42x)   | ok
+plpython3u       | 69.2 ms (1.44x)    | 342.2 ms (3.72x)   | ok
+
+x = relative to plpgsql (lower is faster). plxruby/plxphp transpile to plpgsql.

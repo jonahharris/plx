@@ -1,0 +1,12 @@
+# build artifacts
+*.o
+*.so
+*.bc
+*.dylib
+# PGXS
+results/
+regression.diffs
+regression.out
+# editor
+*.swp
+*~
