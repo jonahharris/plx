@@ -423,6 +423,8 @@ Two points to keep in mind:
 ## Further reading
 
 - `README.md`: build and install.
-- `doc/LIMITATIONS.md`: supported and rejected constructs, semantic differences.
+- Per-dialect chapters: `doc/plxruby.md`, `doc/plxphp.md`, `doc/plxjs.md`
+  (full syntax, supported and rejected constructs, semantic differences).
+- `doc/PARITY.md`: the plpgsql construct parity matrix.
 - `doc/ARCHITECTURE.md`: how plx maps to the plpgsql engine.
 - `doc/TRANSPILER.md`: transpiler specification.

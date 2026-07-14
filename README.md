@@ -1,18 +1,22 @@
 # plx
 
-plx is a PostgreSQL extension that lets you write stored functions in a Ruby or
-PHP dialect. At `CREATE FUNCTION` time plx transpiles the function body to
-plpgsql and stores the plpgsql in `pg_proc.prosrc`. At run time the function is
-executed by the standard plpgsql interpreter. There is no separate language
-runtime loaded into the backend.
+plx is a PostgreSQL extension that lets you write stored functions in a Ruby,
+PHP, or JavaScript dialect. At `CREATE FUNCTION` time plx transpiles the function
+body to plpgsql and stores the plpgsql in `pg_proc.prosrc`. At run time the
+function is executed by the standard plpgsql interpreter. There is no separate
+language runtime loaded into the backend.
 
-The front end is dialect-pluggable. Three dialects are implemented:
+The front end is dialect-pluggable. Three dialects are implemented, each with its
+own chapter:
 
-- `plxruby`: a Ruby dialect.
-- `plxphp`: a PHP dialect.
-- `plxjs`: a JavaScript dialect.
+- `plxruby`: a Ruby dialect. See [doc/plxruby.md](doc/plxruby.md).
+- `plxphp`: a PHP dialect. See [doc/plxphp.md](doc/plxphp.md).
+- `plxjs`: a JavaScript dialect. See [doc/plxjs.md](doc/plxjs.md).
 
 One more is planned: `plxpython3`.
+
+Every plpgsql statement type is reachable from every dialect. See
+[doc/PARITY.md](doc/PARITY.md) for the construct matrix.
 
 The language names are prefixed with `plx` so the extension coexists with the
 native PL/Ruby and PL/PHP languages in the same database.
@@ -100,14 +104,16 @@ CREATE FUNCTION grade(score int) RETURNS text LANGUAGE plxjs AS $$
 $$;
 ```
 
-More examples, including ones taken from the PL/pgSQL manual shown side by side
-with the plpgsql they produce, are in [doc/USERGUIDE.md](doc/USERGUIDE.md).
+## Documentation
 
-## Supported constructs and limitations
-
-See [doc/LIMITATIONS.md](doc/LIMITATIONS.md) for the supported constructs per
-dialect, the constructs that are rejected at `CREATE FUNCTION` time, and the
-semantic differences from the source languages.
+- Per-dialect chapters: [plxruby](doc/plxruby.md), [plxphp](doc/plxphp.md),
+  [plxjs](doc/plxjs.md). Each covers the full syntax, supported constructs with
+  examples, semantic differences, and what is rejected.
+- [doc/PARITY.md](doc/PARITY.md): the plpgsql construct parity matrix.
+- [doc/USERGUIDE.md](doc/USERGUIDE.md): examples from the PL/pgSQL manual shown in
+  each dialect next to the plpgsql they produce.
+- [doc/ARCHITECTURE.md](doc/ARCHITECTURE.md) and
+  [doc/TRANSPILER.md](doc/TRANSPILER.md): design and transpiler specification.
 
 ## Performance
 
@@ -121,8 +127,8 @@ faster than the native embedded-interpreter PLs on row-iteration workloads. See
 plx.control, plx--1.0.sql   extension control and install SQL
 Makefile                    PGXS build
 src/                        C sources (transpiler, dialect surfaces, PL handler)
-doc/                        architecture, transpiler spec, limitations
-test/                       Ruby corpus + runner, PHP smoke test
+doc/                        per-dialect chapters, architecture, transpiler, parity
+test/                       pg_regress suite, corpus runner, fuzzer
 bench/                      benchmark harness and results
 ```
 
