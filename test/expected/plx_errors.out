@@ -12,16 +12,6 @@ return helper
 $$;
 ERROR:  plxruby: nested 'def' is not supported
 DETAIL:  at plxruby source line 2
--- plxruby: case/when
-CREATE FUNCTION e_rb_case(n int) RETURNS text LANGUAGE plxruby AS $$
-case n
-when 1
-  return "one"
-end
-return "other"
-$$;
-ERROR:  plxruby: case/when is not supported (write if/elsif or a CASE expression)
-DETAIL:  at plxruby source line 2
 -- plxruby: unresolvable local type
 CREATE FUNCTION e_rb_type() RETURNS int LANGUAGE plxruby AS $$
 x = some_call()
@@ -36,6 +26,13 @@ return 1
 $$;
 ERROR:  plxruby: next outside a loop
 DETAIL:  at plxruby source line 2
+-- plxruby: assignment with an empty right-hand side
+CREATE FUNCTION e_rb_emptyrhs() RETURNS int LANGUAGE plxruby AS $$
+x =#:: int
+return 1
+$$;
+ERROR:  plxruby: assignment requires a value on the right-hand side
+DETAIL:  at plxruby source line 2
 -- plxphp: nested function definition
 CREATE FUNCTION e_php_fn() RETURNS int LANGUAGE plxphp AS $$
 function helper() { return 1; }
@@ -43,10 +40,22 @@ return 1;
 $$;
 ERROR:  plxphp: nested function definitions are not supported
 DETAIL:  at plxphp source line 2
--- plxphp: switch/case
-CREATE FUNCTION e_php_switch(n int) RETURNS text LANGUAGE plxphp AS $$
-switch ($n) { case 1: return "one"; }
-return "other";
+-- plxphp: switch fall-through (non-terminated case body)
+CREATE FUNCTION e_php_fall(n int) RETURNS text LANGUAGE plxphp AS $$
+switch ($n) {
+  case 1: $x = "a";
+  case 2: return "b";
+}
+return "c";
 $$;
-ERROR:  plxphp: switch/case is not supported (use if/elseif)
-DETAIL:  at plxphp source line 2
+ERROR:  plxphp: switch fall-through is not supported; end each case with 'break' or 'return'
+DETAIL:  at plxphp source line 4
+-- plxjs: switch fall-through
+CREATE FUNCTION e_js_fall(n int) RETURNS text LANGUAGE plxjs AS $$
+switch (n) {
+  case 1: let x = "a";
+  default: return "b";
+}
+$$;
+ERROR:  plxjs: switch fall-through is not supported; end each case with 'break' or 'return'
+DETAIL:  at plxjs source line 4

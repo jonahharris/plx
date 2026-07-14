@@ -84,15 +84,19 @@ typedef struct
 static pg_noreturn void plx_err(Ctx *cx, int line, const char *fmt,...) pg_attribute_printf(3, 4);
 static char *rewrite_expr(Ctx *cx, const char *s, int len, bool boolctx);
 static char *rewrite_expr_inner(Ctx *cx, const char *s, int len, bool boolctx);
+static char *rw_range(Ctx *cx, int a, int b, bool boolctx);
+static char *span_text(Ctx *cx, int a, int b);
 static void parse_stmt(Ctx *cx, int indent, bool toplevel);
 static void parse_stmt_inner(Ctx *cx, int indent, bool toplevel);
 static void parse_brace_stmt_inner(Ctx *cx, int ind, bool toplevel);
 static void parse_block(Ctx *cx, int indent);
 static void parse_iter(Ctx *cx, int a, int do_pos, int e, int ind);
 static void parse_begin(Ctx *cx, int ind);
+static void parse_case(Ctx *cx, int ind);
 static void emit_core(Ctx *cx, int a, int b, int ind, bool toplevel);
 static void parse_brace_program(Ctx *cx);
 static void parse_brace_block(Ctx *cx, int ind);
+static void parse_switch_brace(Ctx *cx, int ind);
 static void parse_brace_stmt(Ctx *cx, int ind, bool toplevel);
 
 /* ---------------------------------------------------------------- errors */
@@ -896,6 +900,15 @@ rewrite_expr_inner(Ctx *cx, const char *s, int len, bool boolctx)
 				}
 			}
 
+			/* found() / found? -> the plpgsql FOUND special variable */
+			if (wl == 5 && strncmp(s + i, "found", 5) == 0 &&
+				((j < len && s[j] == '?') ||
+				 (j + 1 < len && s[j] == '(' && s[j + 1] == ')')))
+			{
+				appendStringInfoString(&out, "FOUND");
+				i = j + (s[j] == '?' ? 1 : 2);
+				continue;
+			}
 			if ((wl == 3 && strncmp(s + i, "nil", 3) == 0) ||
 				(wl == 4 && strncmp(s + i, "null", 4) == 0) ||
 				(wl == 9 && strncmp(s + i, "undefined", 9) == 0))
@@ -1591,6 +1604,49 @@ emit_core(Ctx *cx, int a, int b, int ind, bool toplevel)
 			emit_raise_call(cx, a, ind);
 			return;
 		}
+		if (name_eq(t0, "assert"))	/* assert(cond[, msg]) -> ASSERT cond[, msg]; */
+		{
+			int			as[4], ae[4], after, n;
+
+			n = parse_args(cx, a, as, ae, 4, &after);
+			if (n < 1)
+				plx_err(cx, t0->line, "assert requires a condition");
+			indent(o, ind);
+			appendStringInfo(o, "ASSERT %s", rw_range(cx, as[0], ae[0], true));
+			if (n >= 2)
+				appendStringInfo(o, ", %s", rw_range(cx, as[1], ae[1], false));
+			appendStringInfoString(o, ";\n");
+			return;
+		}
+		if (name_eq(t0, "call"))	/* call("proc", a, b) -> CALL proc(a, b); */
+		{
+			int			as[16], ae[16], after, n, i;
+
+			n = parse_args(cx, a, as, ae, 16, &after);
+			if (n < 1)
+				plx_err(cx, t0->line, "call requires a procedure name");
+			indent(o, ind);
+			appendStringInfoString(o, "CALL ");
+			if (arg_is_string_literal(cx, as[0], ae[0]))
+			{
+				Tok		   *pn = &cx->t[as[0]];
+
+				appendBinaryStringInfo(o, pn->s + 1, pn->len - 2);	/* unquote */
+			}
+			else
+				appendStringInfoString(o, rw_range(cx, as[0], ae[0], false));
+			appendStringInfoChar(o, '(');
+			for (i = 1; i < n; i++)
+				appendStringInfo(o, "%s%s", i > 1 ? ", " : "", rw_range(cx, as[i], ae[i], false));
+			appendStringInfoString(o, ");\n");
+			return;
+		}
+		if (name_eq(t0, "commit") || name_eq(t0, "rollback"))
+		{
+			indent(o, ind);
+			appendStringInfo(o, "%s;\n", name_eq(t0, "commit") ? "COMMIT" : "ROLLBACK");
+			return;
+		}
 	}
 
 	/* return */
@@ -1681,6 +1737,24 @@ emit_core(Ctx *cx, int a, int b, int ind, bool toplevel)
 			a + 3 < b && cx->t[a + 3].kind == T_LPAREN)
 		{
 			emit_fetch(cx, t0, a + 2, ind, name_eq(&cx->t[a + 2], "fetch_one!"));
+			return;
+		}
+		/* lhs = row_count() -> GET DIAGNOSTICS lhs = ROW_COUNT; */
+		if (tok_is(op, "=") && a + 2 < b && cx->t[a + 2].kind == T_IDENT &&
+			name_eq(&cx->t[a + 2], "row_count") &&
+			a + 3 < b && cx->t[a + 3].kind == T_LPAREN)
+		{
+			if (!is_param(cx, t0->s, t0->len))
+			{
+				PlxLocal2  *l = local_find(cx, t0->s, t0->len);
+
+				if (!l)
+					l = local_add(cx, t0->s, t0->len);
+				if (!l->typ)
+					l->typ = pstrdup("bigint");
+			}
+			indent(o, ind);
+			appendStringInfo(o, "GET DIAGNOSTICS %.*s = ROW_COUNT;\n", t0->len, t0->s);
 			return;
 		}
 
@@ -2263,6 +2337,105 @@ parse_begin(Ctx *cx, int ind)
 	}
 }
 
+/* rewrite a comma-separated value list (for CASE WHEN v1, v2) */
+static char *
+rewrite_value_list(Ctx *cx, int a, int b)
+{
+	StringInfoData out;
+	int			i, seg = a, depth = 0, first = 1;
+
+	initStringInfo(&out);
+	for (i = a; i <= b; i++)
+	{
+		if (i < b && (cx->t[i].kind == T_LPAREN || cx->t[i].kind == T_LBRACKET))
+			depth++;
+		else if (i < b && (cx->t[i].kind == T_RPAREN || cx->t[i].kind == T_RBRACKET))
+			depth--;
+		if (i == b || (depth == 0 && cx->t[i].kind == T_COMMA))
+		{
+			char	   *st = span_text(cx, seg, i);
+
+			if (!first)
+				appendStringInfoString(&out, ", ");
+			appendStringInfoString(&out, rewrite_expr(cx, st, (int) strlen(st), false));
+			first = 0;
+			seg = i + 1;
+		}
+	}
+	return out.data;
+}
+
+/*
+ * Ruby case/when -> plpgsql CASE. With a subject expression it is a simple CASE
+ * (WHEN value-list); without one it is a searched CASE (WHEN condition).
+ */
+static void
+parse_case(Ctx *cx, int ind)
+{
+	StringInfo	o = &cx->out;
+	int			start = cx->pos;
+	int			hdln = cx->t[start].line;
+	int			e = stmt_end(cx, start);
+	bool		simple = (e > start + 1);
+	char	   *subj = NULL;
+
+	if (simple)
+	{
+		char	   *st = span_text(cx, start + 1, e);
+
+		subj = rewrite_expr(cx, st, (int) strlen(st), false);
+	}
+	cx->pos = e;
+	skip_seps(cx);
+
+	indent(o, ind);
+	if (simple)
+		appendStringInfo(o, "CASE %s\n", subj);
+	else
+		appendStringInfoString(o, "CASE\n");
+
+	if (!(cx->t[cx->pos].kind == T_KW && cx->t[cx->pos].kw == KW_WHEN))
+		plx_err(cx, hdln, "case requires at least one 'when'");
+
+	while (cx->t[cx->pos].kind == T_KW && cx->t[cx->pos].kw == KW_WHEN)
+	{
+		int			ws = cx->pos;
+		int			we = stmt_end(cx, ws);
+		int			va = ws + 1, vb = we;
+		char	   *vals;
+
+		if (vb > va && cx->t[vb - 1].kind == T_KW && cx->t[vb - 1].kw == KW_THEN)
+			vb--;
+		if (va >= vb)
+			plx_err(cx, cx->t[ws].line, "when requires a value or condition");
+		if (simple)
+			vals = rewrite_value_list(cx, va, vb);
+		else
+		{
+			char	   *st = span_text(cx, va, vb);
+
+			vals = rewrite_expr(cx, st, (int) strlen(st), true);
+		}
+		indent(o, ind + 1);
+		appendStringInfo(o, "WHEN %s THEN\n", vals);
+		cx->pos = we;
+		parse_block(cx, ind + 2);
+	}
+	if (cx->t[cx->pos].kind == T_KW && cx->t[cx->pos].kw == KW_ELSE)
+	{
+		indent(o, ind + 1);
+		appendStringInfoString(o, "ELSE\n");
+		cx->pos++;
+		parse_block(cx, ind + 2);
+	}
+	if (cx->t[cx->pos].kind == T_KW && cx->t[cx->pos].kw == KW_END)
+		cx->pos++;
+	else
+		plx_err(cx, hdln, "unterminated case block");
+	indent(o, ind);
+	appendStringInfoString(o, "END CASE;\n");
+}
+
 /* parse statements until a closer keyword or EOF (does not consume closer) */
 static void
 parse_block(Ctx *cx, int ind)
@@ -2317,7 +2490,7 @@ parse_stmt_inner(Ctx *cx, int ind, bool toplevel)
 				plx_err(cx, tk->line, "nested 'def' is not supported");
 				return;
 			case KW_CASE:
-				plx_err(cx, tk->line, "case/when is not supported (write if/elsif or a CASE expression)");
+				parse_case(cx, ind);
 				return;
 			case KW_BEGIN:
 				parse_begin(cx, ind);
@@ -2793,6 +2966,120 @@ emit_php_throw(Ctx *cx, int a, int b, int ind)
 	}
 }
 
+/* switch (expr) { case v: ...; break; [case..] default: ... } -> CASE ... END CASE */
+static void
+parse_switch_brace(Ctx *cx, int ind)
+{
+	StringInfo	o = &cx->out;
+	int			line = cx->t[cx->pos].line;
+	int			ca, cb;
+
+	cx->pos++;					/* switch */
+	paren_group(cx, &ca, &cb);
+	indent(o, ind);
+	appendStringInfo(o, "CASE %s\n", rw_range(cx, ca, cb, false));
+	if (cx->t[cx->pos].kind != T_LBRACE)
+		plx_err(cx, line, "switch requires a '{' block");
+	cx->pos++;
+
+	for (;;)
+	{
+		StringInfoData vals;
+		bool		is_default = false;
+		int			nvals = 0;
+
+		skip_seps(cx);
+		if (cx->t[cx->pos].kind == T_RBRACE)
+		{
+			cx->pos++;
+			break;
+		}
+		if (cx->t[cx->pos].kind == T_EOF)
+			plx_err(cx, line, "unterminated switch block");
+
+		/* collect one or more consecutive case/default labels */
+		initStringInfo(&vals);
+		for (;;)
+		{
+			if (cx->t[cx->pos].kind == T_KW && cx->t[cx->pos].kw == KW_WHEN)	/* case */
+			{
+				int			va = ++cx->pos, ve = va;
+
+				while (cx->t[ve].kind != T_EOF && !tok_is(&cx->t[ve], ":"))
+					ve++;
+				if (cx->t[ve].kind == T_EOF)
+					plx_err(cx, line, "case label requires ':'");
+				if (nvals++)
+					appendStringInfoString(&vals, ", ");
+				appendStringInfoString(&vals, rw_range(cx, va, ve, false));
+				cx->pos = ve + 1;
+			}
+			else if (cx->t[cx->pos].kind == T_KW && cx->t[cx->pos].kw == KW_ELSE)	/* default */
+			{
+				cx->pos++;
+				if (!tok_is(&cx->t[cx->pos], ":"))
+					plx_err(cx, line, "default label requires ':'");
+				cx->pos++;
+				is_default = true;
+			}
+			else
+				break;
+			skip_seps(cx);
+			if (!(cx->t[cx->pos].kind == T_KW &&
+				  (cx->t[cx->pos].kw == KW_WHEN || cx->t[cx->pos].kw == KW_ELSE)))
+				break;
+		}
+		if (!nvals && !is_default)
+			plx_err(cx, line, "switch body must consist of case/default labels");
+
+		indent(o, ind + 1);
+		if (is_default)
+			appendStringInfoString(o, "ELSE\n");
+		else
+			appendStringInfo(o, "WHEN %s THEN\n", vals.data);
+
+		/*
+		 * Body: statements until break / next label / '}'. An arm may end with
+		 * an explicit 'break' or with a terminating statement (return/throw);
+		 * reaching the next label with neither is genuine C fall-through, which
+		 * plpgsql CASE cannot represent, so it is rejected.
+		 */
+		{
+			bool		terminated = false;
+
+			for (;;)
+			{
+				Tok		   *st;
+
+				skip_seps(cx);
+				st = &cx->t[cx->pos];
+				if (st->kind == T_KW && st->kw == KW_BREAK)
+				{
+					cx->pos++;
+					skip_seps(cx);
+					terminated = true;
+					break;
+				}
+				if (st->kind == T_RBRACE)
+					break;
+				if (st->kind == T_KW && (st->kw == KW_WHEN || st->kw == KW_ELSE))
+				{
+					if (!terminated)
+						plx_err(cx, st->line,
+								"switch fall-through is not supported; end each case with 'break' or 'return'");
+					break;
+				}
+				if (st->kind == T_EOF)
+					plx_err(cx, line, "unterminated switch block");
+				terminated = (st->kind == T_KW && (st->kw == KW_RETURN || st->kw == KW_RAISE));
+				parse_brace_stmt(cx, ind + 2, false);
+			}
+		}
+	}
+	indent(o, ind);
+	appendStringInfoString(o, "END CASE;\n");
+}
+
 static void
 parse_brace_stmt_inner(Ctx *cx, int ind, bool toplevel)
 {
@@ -2825,7 +3112,7 @@ parse_brace_stmt_inner(Ctx *cx, int ind, bool toplevel)
 				plx_err(cx, tk->line, "nested function definitions are not supported");
 				return;
 			case KW_CASE:
-				plx_err(cx, tk->line, "switch/case is not supported (use if/elseif)");
+				parse_switch_brace(cx, ind);
 				return;
 			default:
 				break;

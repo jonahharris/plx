@@ -11,15 +11,6 @@ end
 return helper
 $$;
 
--- plxruby: case/when
-CREATE FUNCTION e_rb_case(n int) RETURNS text LANGUAGE plxruby AS $$
-case n
-when 1
-  return "one"
-end
-return "other"
-$$;
-
 -- plxruby: unresolvable local type
 CREATE FUNCTION e_rb_type() RETURNS int LANGUAGE plxruby AS $$
 x = some_call()
@@ -32,14 +23,31 @@ next
 return 1
 $$;
 
+-- plxruby: assignment with an empty right-hand side
+CREATE FUNCTION e_rb_emptyrhs() RETURNS int LANGUAGE plxruby AS $$
+x =#:: int
+return 1
+$$;
+
 -- plxphp: nested function definition
 CREATE FUNCTION e_php_fn() RETURNS int LANGUAGE plxphp AS $$
 function helper() { return 1; }
 return 1;
 $$;
 
--- plxphp: switch/case
-CREATE FUNCTION e_php_switch(n int) RETURNS text LANGUAGE plxphp AS $$
-switch ($n) { case 1: return "one"; }
-return "other";
+-- plxphp: switch fall-through (non-terminated case body)
+CREATE FUNCTION e_php_fall(n int) RETURNS text LANGUAGE plxphp AS $$
+switch ($n) {
+  case 1: $x = "a";
+  case 2: return "b";
+}
+return "c";
+$$;
+
+-- plxjs: switch fall-through
+CREATE FUNCTION e_js_fall(n int) RETURNS text LANGUAGE plxjs AS $$
+switch (n) {
+  case 1: let x = "a";
+  default: return "b";
+}
 $$;

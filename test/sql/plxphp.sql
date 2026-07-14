@@ -81,3 +81,20 @@ CREATE FUNCTION php_checkpos(v int) RETURNS int LANGUAGE plxphp AS $$
   return $v;
 $$;
 SELECT php_checkpos(-3) AS should_error;
+
+-- switch (with stacked cases and default)
+CREATE FUNCTION php_switch(n int) RETURNS text LANGUAGE plxphp AS $$
+switch ($n) {
+  case 1: return "one";
+  case 2: case 3: return "few";
+  default: return "many";
+}
+$$;
+SELECT php_switch(1), php_switch(2), php_switch(9);
+
+-- assert
+CREATE FUNCTION php_assert(n int) RETURNS int LANGUAGE plxphp AS $$
+assert($n > 0, "must be positive");
+return $n;
+$$;
+SELECT php_assert(5);

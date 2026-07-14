@@ -97,3 +97,20 @@ SELECT js_checkpos(7);
 DO LANGUAGE plxjs $$
 for (let i = 1; i <= 2; i++) { raise("warning", `row ${i}`); }
 $$;
+
+-- switch (with stacked cases and default)
+CREATE FUNCTION js_switch(n int) RETURNS text LANGUAGE plxjs AS $$
+switch (n) {
+  case 1: return "one";
+  case 2: case 3: return "few";
+  default: return "many";
+}
+$$;
+SELECT js_switch(1), js_switch(2), js_switch(9);
+
+-- assert
+CREATE FUNCTION js_assert(n int) RETURNS int LANGUAGE plxjs AS $$
+assert(n > 0, "must be positive");
+return n;
+$$;
+SELECT js_assert(5);

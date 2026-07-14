@@ -23,6 +23,7 @@ static const PlxKwSpell js_kws[] = {
 	{"return", KW_RETURN}, {"break", KW_BREAK}, {"continue", KW_NEXT},
 	{"try", KW_BEGIN}, {"catch", KW_RESCUE}, {"finally", KW_ENSURE},
 	{"throw", KW_RAISE}, {"function", KW_DEF}, {"switch", KW_CASE},
+	{"case", KW_WHEN}, {"default", KW_ELSE},
 	{"let", KW_LET}, {"const", KW_LET}, {"var", KW_LET},
 	{"true", KW_TRUE}, {"false", KW_FALSE}, {"null", KW_NIL},
 	{"emit", KW_EMIT}, {"return_next", KW_RETURN_NEXT},

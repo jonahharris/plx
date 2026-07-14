@@ -148,3 +148,51 @@ SELECT rb_checkpos(7);
 DO LANGUAGE plxruby $$
 raise warning: "plxruby do-block ran: #{6 * 7}"
 $$;
+
+-- case/when (simple and searched forms)
+CREATE FUNCTION rb_case_simple(n int) RETURNS text LANGUAGE plxruby AS $$
+case n
+when 1
+  return "one"
+when 2, 3
+  return "few"
+else
+  return "many"
+end
+$$;
+SELECT rb_case_simple(1), rb_case_simple(3), rb_case_simple(9);
+
+CREATE FUNCTION rb_case_searched(n int) RETURNS text LANGUAGE plxruby AS $$
+case
+when n < 0
+  return "neg"
+when n == 0
+  return "zero"
+else
+  return "pos"
+end
+$$;
+SELECT rb_case_searched(-5), rb_case_searched(0), rb_case_searched(5);
+
+-- assert
+CREATE FUNCTION rb_assert(n int) RETURNS int LANGUAGE plxruby AS $$
+assert(n > 0, "must be positive")
+return n
+$$;
+SELECT rb_assert(5);
+
+-- row_count via GET DIAGNOSTICS, and found?
+CREATE TABLE rb_t(a int);
+CREATE FUNCTION rb_ins(n int) RETURNS bigint LANGUAGE plxruby AS $$
+rc = 0 #:: bigint
+execute("INSERT INTO rb_t SELECT g FROM generate_series(1, #{n}) g")
+rc = row_count()
+return rc
+$$;
+SELECT rb_ins(4);
+
+CREATE FUNCTION rb_found() RETURNS boolean LANGUAGE plxruby AS $$
+perform("SELECT 1 WHERE false")
+return found?
+$$;
+SELECT rb_found();
