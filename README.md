@@ -1,19 +1,18 @@
 # plx
 
 plx is a PostgreSQL extension that lets you write stored functions in a Ruby,
-PHP, or JavaScript dialect. At `CREATE FUNCTION` time plx transpiles the function
-body to plpgsql and stores the plpgsql in `pg_proc.prosrc`. At run time the
-function is executed by the standard plpgsql interpreter. There is no separate
-language runtime loaded into the backend.
+PHP, JavaScript, or Python dialect. At `CREATE FUNCTION` time plx transpiles the
+function body to plpgsql and stores the plpgsql in `pg_proc.prosrc`. At run time
+the function is executed by the standard plpgsql interpreter. There is no
+separate language runtime loaded into the backend.
 
-The front end is dialect-pluggable. Three dialects are implemented, each with its
+The front end is dialect-pluggable. Four dialects are implemented, each with its
 own chapter:
 
 - `plxruby`: a Ruby dialect. See [doc/plxruby.md](doc/plxruby.md).
 - `plxphp`: a PHP dialect. See [doc/plxphp.md](doc/plxphp.md).
 - `plxjs`: a JavaScript dialect. See [doc/plxjs.md](doc/plxjs.md).
-
-One more is planned: `plxpython3`.
+- `plxpython3`: a Python dialect. See [doc/plxpython3.md](doc/plxpython3.md).
 
 Every plpgsql statement type is reachable from every dialect. See
 [doc/PARITY.md](doc/PARITY.md) for the construct matrix.

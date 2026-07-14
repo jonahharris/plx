@@ -1,7 +1,7 @@
 # plx / plpgsql Feature Parity
 
 Target: every plpgsql capability is expressible in each plx dialect (plxruby,
-plxphp, plxjs). The reference is the plpgsql statement set in
+plxphp, plxjs, plxpython3). The reference is the plpgsql statement set in
 `src/pl/plpgsql/src/plpgsql.h` (`PLpgSQL_stmt_*`) plus its declaration forms.
 
 Legend: done / partial / todo. All three dialects track the same status unless

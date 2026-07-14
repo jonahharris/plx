@@ -128,3 +128,13 @@ outer: for i in range(1, n + 1):
 return count
 $$;
 SELECT py_label(5);
+
+-- is None / is not None, and None/True/False literals
+CREATE FUNCTION py_isnull(x int) RETURNS text LANGUAGE plxpython3 AS $$
+if x is None:
+    return "null"
+if x is not None:
+    return "notnull"
+return "?"
+$$;
+SELECT py_isnull(NULL), py_isnull(5);

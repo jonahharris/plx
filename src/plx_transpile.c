@@ -1125,11 +1125,14 @@ rewrite_expr_inner(Ctx *cx, const char *s, int len, bool boolctx)
 			}
 			if ((wl == 3 && strncmp(s + i, "nil", 3) == 0) ||
 				(wl == 4 && strncmp(s + i, "null", 4) == 0) ||
+				(wl == 4 && strncmp(s + i, "None", 4) == 0) ||
 				(wl == 9 && strncmp(s + i, "undefined", 9) == 0))
 				appendStringInfoString(&out, "NULL");
-			else if (wl == 4 && strncmp(s + i, "true", 4) == 0)
+			else if ((wl == 4 && strncmp(s + i, "true", 4) == 0) ||
+					 (wl == 4 && strncmp(s + i, "True", 4) == 0))
 				appendStringInfoString(&out, "true");
-			else if (wl == 5 && strncmp(s + i, "false", 5) == 0)
+			else if ((wl == 5 && strncmp(s + i, "false", 5) == 0) ||
+					 (wl == 5 && strncmp(s + i, "False", 5) == 0))
 				appendStringInfoString(&out, "false");
 			else if (wl == 3 && strncmp(s + i, "and", 3) == 0)
 				appendStringInfoString(&out, "AND");
@@ -1229,6 +1232,8 @@ rewrite_expr_inner(Ctx *cx, const char *s, int len, bool boolctx)
 					if ((k + 3 <= len && strncmp(s + k, "nil", 3) == 0 &&
 						 (k + 3 == len || !is_ident(s[k + 3]))) ||
 						(k + 4 <= len && strncmp(s + k, "null", 4) == 0 &&
+						 (k + 4 == len || !is_ident(s[k + 4]))) ||
+						(k + 4 <= len && strncmp(s + k, "None", 4) == 0 &&
 						 (k + 4 == len || !is_ident(s[k + 4]))))
 					{
 						appendStringInfoString(&out, eq ? " IS NULL" : " IS NOT NULL");

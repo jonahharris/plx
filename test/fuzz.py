@@ -12,7 +12,7 @@ import os, random, subprocess, sys
 
 PSQL = "/usr/local/pgsql/bin/psql"
 ENV = dict(os.environ, PGHOST=os.environ.get("PGHOST", "/tmp"), PGUSER="postgres")
-DIALECTS = ["plxruby", "plxphp", "plxjs"]
+DIALECTS = ["plxruby", "plxphp", "plxjs", "plxpython3"]
 random.seed(20260714)
 
 SEEDS = {
@@ -44,10 +44,22 @@ SEEDS = {
   'try { return 1; } catch (e) { raise("notice", `${e.message}`); return -1; }',
   'throw new Error(`bad ${x}`);',
  ],
+ "plxpython3": [
+  "return a + b * 2\n",
+  "total = 0\nfor i in range(1, n + 1):\n    total = total + i\nreturn total\n",
+  'if a:\n    return 1\nelif b:\n    return 2\nelse:\n    return 3\n',
+  'return f"hi {x} there"\n',
+  'for row in query("select a from t"):\n    x = row.a\nreturn x\n',
+  'try:\n    return 1\nexcept Exception as e:\n    return -1\n',
+  'if x > 0:\n    pass\nelse:\n    x = 0\nreturn x\n',
+  'assert n > 0, "bad"\nraise ValueError(f"no {x}")\n',
+ ],
 }
 SPECIALS = [b'"', b"'", b"`", b"#{", b"${", b"{$", b"*/", b"/*", b"\\", b"(", b")",
             b"{", b"}", b"[", b"]", b"end", b"..", b"...", b"do |", b"|", b"::",
-            b"->", b"=>", b";", b"raise", b"query(", b"fetch_one(", b"\n"]
+            b"->", b"=>", b";", b"raise", b"query(", b"fetch_one(", b"\n",
+            b'\n    ', b'\n\t', b':', b'    ', b'if ', b'for ', b'range(',
+            b'f"', b'except ', b'pass', b'\n        ', b'elif ']
 
 def mutate(s):
     b = bytearray(s.encode("utf-8", "ignore"))
@@ -88,6 +100,10 @@ def pathological():
      ("plxruby", "query(" * 3000),
      ("plxjs", "/*" + "a" * 200000),               # unterminated block comment
      ("plxphp", "for (" + ";" * 100000 + ")"),
+     ("plxpython3", "if x:\n" * 4000 + "    return 1\n"),
+     ("plxpython3", "return f\"" + "{" * 3000 + "x" + "}" * 3000 + "\"\n"),
+     ("plxpython3", "\n".join("    " * i + "if x:" for i in range(2000))),
+     ("plxpython3", "for i in range(" + "(" * 5000),
     ]
 
 def quote(body):

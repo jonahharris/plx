@@ -187,3 +187,17 @@ SELECT py_label(5);
         1
 (1 row)
 
+-- is None / is not None, and None/True/False literals
+CREATE FUNCTION py_isnull(x int) RETURNS text LANGUAGE plxpython3 AS $$
+if x is None:
+    return "null"
+if x is not None:
+    return "notnull"
+return "?"
+$$;
+SELECT py_isnull(NULL), py_isnull(5);
+ py_isnull | py_isnull 
+-----------+-----------
+ null      | notnull
+(1 row)
+
