@@ -65,14 +65,22 @@ return out
 $$;
 SELECT f_excl();
 
--- null-safe equality and three-valued conditions
+-- SQL three-valued equality: == maps to plain = (not null-aware), so a
+-- comparison involving NULL is unknown and the condition is not taken.
 CREATE FUNCTION f_null(a int, b int) RETURNS text LANGUAGE plxruby AS $$
 if a == b
   return "eq"
 end
 return "ne"
 $$;
-SELECT f_null(NULL, NULL) AS both_null_eq, f_null(1, NULL) AS one_null_ne, f_null(2, 2) AS eq;
+SELECT f_null(NULL, NULL) AS null_vs_null_is_ne,
+       f_null(1, NULL) AS val_vs_null_is_ne,
+       f_null(2, 2) AS eq;
+-- the literal-nil form is the only null special case
+CREATE FUNCTION f_isnil(a int) RETURNS text LANGUAGE plxruby AS $$
+return a == nil ? "nil" : "notnil"
+$$;
+SELECT f_isnil(NULL) AS nil, f_isnil(5) AS notnil;
 
 -- DO blocks in every dialect
 DO LANGUAGE plxruby $$ raise notice: "ruby do #{2 * 3}" $$;

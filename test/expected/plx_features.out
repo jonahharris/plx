@@ -104,17 +104,30 @@ LINE 1: out := out + i::text
 HINT:  No operator matches the given name and argument types. You might need to add explicit type casts.
 QUERY:  out := out + i::text
 CONTEXT:  PL/pgSQL function f_excl() line 6 at assignment
--- null-safe equality and three-valued conditions
+-- SQL three-valued equality: == maps to plain = (not null-aware), so a
+-- comparison involving NULL is unknown and the condition is not taken.
 CREATE FUNCTION f_null(a int, b int) RETURNS text LANGUAGE plxruby AS $$
 if a == b
   return "eq"
 end
 return "ne"
 $$;
-SELECT f_null(NULL, NULL) AS both_null_eq, f_null(1, NULL) AS one_null_ne, f_null(2, 2) AS eq;
- both_null_eq | one_null_ne | eq 
---------------+-------------+----
- ne           | ne          | eq
+SELECT f_null(NULL, NULL) AS null_vs_null_is_ne,
+       f_null(1, NULL) AS val_vs_null_is_ne,
+       f_null(2, 2) AS eq;
+ null_vs_null_is_ne | val_vs_null_is_ne | eq 
+--------------------+-------------------+----
+ ne                 | ne                | eq
+(1 row)
+
+-- the literal-nil form is the only null special case
+CREATE FUNCTION f_isnil(a int) RETURNS text LANGUAGE plxruby AS $$
+return a == nil ? "nil" : "notnil"
+$$;
+SELECT f_isnil(NULL) AS nil, f_isnil(5) AS notnil;
+ nil | notnil 
+-----+--------
+ nil | notnil
 (1 row)
 
 -- DO blocks in every dialect

@@ -269,8 +269,10 @@ $$;
 These are intentional. plx pins semantics to SQL and plpgsql.
 
 - Decimal literals infer `numeric`, not a floating-point type.
-- Comparisons use SQL three-valued logic. `==` and `!=` are null-aware; a
-  positive `if`/`while` condition treats NULL as false.
+- Comparisons use SQL three-valued logic: `==` and `!=` map to `=` and `<>`, so
+  a comparison involving NULL is unknown (`nil == nil` is not true). Only a
+  comparison with the literal `nil` becomes `IS NULL` / `IS NOT NULL`. A positive
+  `if`/`while` condition treats NULL as false.
 - `String#+` remains SQL numeric `+`. Use interpolation for concatenation.
 - Locals are function-scoped, matching Ruby method scope.
 - Ruby truthiness is not emulated. A condition must be a boolean expression;

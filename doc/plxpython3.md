@@ -228,8 +228,10 @@ $$;
 These are intentional. plx pins semantics to SQL and plpgsql.
 
 - Decimal literals infer `numeric`, not a floating-point type.
-- Comparisons use SQL three-valued logic. `==` and `!=` are null-aware; a
-  positive `if`/`while` condition treats NULL as false.
+- Comparisons use SQL three-valued logic: `==` and `!=` map to `=` and `<>`, so
+  a comparison involving NULL is unknown. Use `is None` / `is not None` (which
+  become `IS NULL` / `IS NOT NULL`) to test for NULL. A positive `if`/`while`
+  condition treats NULL as false.
 - Integer division follows SQL rules, not Python's `/` (float) and `//` (floor).
 - Python truthiness is not emulated. A condition must be a boolean expression. A
   non-boolean condition is an error reported by plpgsql when the function runs.

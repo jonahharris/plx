@@ -242,8 +242,10 @@ These are intentional. plx pins semantics to SQL and plpgsql.
 
 - Decimal literals infer `numeric`, not a floating-point type. Arithmetic is
   exact, not IEEE 754.
-- Comparisons use SQL three-valued logic. `==` and `===` are null-aware; a
-  positive `if`/`while` condition treats NULL as false.
+- Comparisons use SQL three-valued logic: `==`, `===`, `!=`, `!==` map to `=`
+  and `<>`, so a comparison involving NULL is unknown. Only a comparison with the
+  literal `null` becomes `IS NULL` / `IS NOT NULL`. A positive `if`/`while`
+  condition treats NULL as false.
 - `+` is numeric addition; use template literals for string building.
 - JavaScript truthiness is not emulated. A condition must be a boolean
   expression. A non-boolean condition is an error reported by plpgsql when the
