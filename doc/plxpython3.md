@@ -233,6 +233,12 @@ These are intentional. plx pins semantics to SQL and plpgsql.
   become `IS NULL` / `IS NOT NULL`) to test for NULL. A positive `if`/`while`
   condition treats NULL as false.
 - Integer division follows SQL rules, not Python's `/` (float) and `//` (floor).
+  Division and modulo truncate toward zero: `-7 // 2` is `-4` in Python but the
+  SQL result here is `-3`, and `-7 % 2` is `1` in Python but `-1` here.
+- Interpolating a NULL in an f-string renders as an empty string, not the Python
+  string `"None"`; the whole string is never made NULL.
+- Comparisons use SQL type resolution. `1 == "1"` compares an integer to a string
+  literal, which SQL coerces and treats as equal; in Python it is false.
 - Python truthiness is not emulated. A condition must be a boolean expression. A
   non-boolean condition is an error reported by plpgsql when the function runs.
 - Locals are function-scoped, matching Python function scope.

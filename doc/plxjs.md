@@ -246,7 +246,13 @@ These are intentional. plx pins semantics to SQL and plpgsql.
   and `<>`, so a comparison involving NULL is unknown. Only a comparison with the
   literal `null` becomes `IS NULL` / `IS NOT NULL`. A positive `if`/`while`
   condition treats NULL as false.
+- `===` and `!==` do not preserve JavaScript strict-type semantics; they behave
+  like `==` and `!=` and use SQL type resolution. `1 === "1"` is false in
+  JavaScript but compares as equal here. Compare like-typed values.
 - `+` is numeric addition; use template literals for string building.
+- Interpolating a NULL in a template literal renders as an empty string, not the
+  JavaScript string `"null"`; the whole string is never made NULL.
+- Integer division and modulo follow SQL (truncate toward zero).
 - JavaScript truthiness is not emulated. A condition must be a boolean
   expression. A non-boolean condition is an error reported by plpgsql when the
   function runs.
