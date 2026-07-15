@@ -121,6 +121,16 @@ PROCEDURE DIVISION.
 $$;
 SELECT cob_area(2);
 
+-- multi-argument SQL function calls in expressions (comma survives inside parens)
+CREATE FUNCTION cob_funcs(a int, b int, c int) RETURNS int LANGUAGE plxcobol AS $$
+WORKING-STORAGE SECTION.
+01 WS-R PIC S9(9).
+PROCEDURE DIVISION.
+    COMPUTE WS-R = mod(A, B) + greatest(A, B, C)
+    GOBACK RETURNING WS-R.
+$$;
+SELECT cob_funcs(17, 5, 20);
+
 -- STRING-APPEND lowers to the plx_strbuild string builder; % is modulo
 CREATE FUNCTION cob_build(n int) RETURNS text LANGUAGE plxcobol AS $$
 WORKING-STORAGE SECTION.

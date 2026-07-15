@@ -4414,7 +4414,8 @@ cob_lex(Cb *cb, const char *body)
 			   *end = body + strlen(body);
 	int			line = 1,
 				cap = 256,
-				n = 0;
+				n = 0,
+				paren = 0;
 	CbTok	   *t = palloc(sizeof(CbTok) * cap);
 	bool		sp = true;
 
@@ -4433,8 +4434,23 @@ cob_lex(Cb *cb, const char *body)
 			sp = true;
 			continue;
 		}
-		if (*p == ' ' || *p == '\t' || *p == '\r' || *p == ',' || *p == ';')
+		if (*p == ' ' || *p == '\t' || *p == '\r' || *p == ';')
 		{
+			p++;
+			sp = true;
+			continue;
+		}
+		if (*p == ',')
+		{
+			/* COBOL uses ',' as an optional separator between operands; strip it
+			 * at statement level, but keep it inside parentheses so multi-argument
+			 * SQL function calls (mod(a, b)) survive into the expression. */
+			if (paren > 0)
+			{
+				CBPUSH(CB_OP, p, 1);
+				p++;
+				continue;
+			}
 			p++;
 			sp = true;
 			continue;
@@ -4530,11 +4546,14 @@ cob_lex(Cb *cb, const char *body)
 		{
 			CBPUSH(CB_LP, p, 1);
 			p++;
+			paren++;
 			continue;
 		}
 		if (*p == ')')
 		{
 			CBPUSH(CB_RP, p, 1);
+			if (paren > 0)
+				paren--;
 			p++;
 			continue;
 		}
