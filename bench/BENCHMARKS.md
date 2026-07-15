@@ -15,9 +15,10 @@ Five workloads were measured on PostgreSQL 18.4 in the development container
   marshalling).
 - branch: a four-way conditional per element over 2,000,000 elements (branch
   dispatch).
-- call: 500,000 calls to a small function (call and return overhead). For plperl
-  and plpython3u this uses 50,000 iterations, because each call goes through SPI
-  and is far slower; those two cells are scaled to the smaller count.
+- call: 500,000 calls to a small function (call and return overhead). For the
+  embedded PLs (plperl, plpython3u, and native plruby and plphp) this uses 50,000
+  iterations, because each call goes through SPI and is far slower; those cells
+  are scaled to the smaller count.
 
 Each function is written idiomatically in each language, checked for a correct
 result, and called five times; the minimum wall-clock time (`psql \timing`) is
@@ -35,20 +36,30 @@ Times are milliseconds; the multiplier is relative to plpgsql (lower is faster).
 
 | language   | arith        | strbuild     | iter          | branch        | call          |
 |------------|--------------|--------------|---------------|---------------|---------------|
-| plpgsql    | 48 (1.00x)   | 1597 (1.00x) | 88 (1.00x)    | 150 (1.00x)   | 145 (1.00x)   |
-| plxruby    | 50 (1.06x)   | 9 (0.01x)    | 97 (1.10x)    | 153 (1.02x)   | 151 (1.05x)   |
-| plxphp     | 52 (1.09x)   | 9 (0.01x)    | 99 (1.11x)    | 154 (1.02x)   | 149 (1.03x)   |
-| plxjs      | 51 (1.07x)   | 10 (0.01x)   | 94 (1.06x)    | 154 (1.03x)   | 153 (1.06x)   |
-| plxpython3 | 53 (1.12x)   | 10 (0.01x)   | 99 (1.12x)    | 154 (1.03x)   | 149 (1.03x)   |
-| plperl     | 42 (0.88x)   | 12 (0.01x)   | 507 (5.74x)   | 139 (0.93x)   | 273 (1.89x)   |
-| plpython3u | 64 (1.35x)   | 14 (0.01x)   | 337 (3.81x)   | 108 (0.72x)   | 165 (1.14x)   |
+| plpgsql    | 53 (1.00x)   | 1705 (1.00x) | 92 (1.00x)    | 157 (1.00x)   | 160 (1.00x)   |
+| plxruby    | 56 (1.06x)   | 10 (0.01x)   | 103 (1.12x)   | 175 (1.11x)   | 165 (1.03x)   |
+| plxphp     | 56 (1.07x)   | 10 (0.01x)   | 106 (1.14x)   | 165 (1.05x)   | 168 (1.04x)   |
+| plxjs      | 58 (1.10x)   | 10 (0.01x)   | 109 (1.18x)   | 175 (1.11x)   | 167 (1.04x)   |
+| plxpython3 | 58 (1.10x)   | 10 (0.01x)   | 103 (1.12x)   | 165 (1.05x)   | 163 (1.02x)   |
+| plperl     | 45 (0.86x)   | 12 (0.01x)   | 555 (6.00x)   | 163 (1.04x)   | 302 (1.88x)   |
+| plpython3u | 74 (1.40x)   | 15 (0.01x)   | 369 (4.00x)   | 111 (0.70x)   | 181 (1.13x)   |
+| plruby     | 101 (1.91x)  | 53 (0.03x)   | 392 (4.24x)   | 144 (0.92x)   | 476 (2.97x)   |
+| plphp      | 50 (0.95x)   | 14 (0.01x)   | 263 (2.84x)   | 66 (0.42x)    | 270 (1.68x)   |
+
+The last two rows, plruby and plphp, are the third-party native PL/Ruby and
+PL/PHP (see the build notes below); the plx dialects with the same names but a
+`plx` prefix are the transpile-to-plpgsql implementations.
 
 In the strbuild column, native plpgsql is the `s := s || 'x'` baseline and the
 plx dialects use the builder. This is the intended native-versus-plx comparison:
-the same accumulation idiom is 1597 ms in stock plpgsql and about 10 ms in the
-plx dialects. These numbers are on PostgreSQL 18; the builder's amortized-O(1)
-append requires PostgreSQL 18 (see the version note under String building). On
-PostgreSQL 13 to 17 the plx strbuild column would match plpgsql (both O(n^2)).
+the same accumulation idiom is 1705 ms in stock plpgsql and about 10 ms in the
+plx dialects. The plx builder is also faster than the native PLs' own in-language
+append on this workload (native plruby 53 ms, native plphp 14 ms), because it
+mutates one expanded-object buffer in place rather than materializing an
+interpreter string per step. These numbers are on PostgreSQL 18; the builder's
+amortized-O(1) append requires PostgreSQL 18 (see the version note under String
+building). On PostgreSQL 13 to 17 the plx strbuild column would match plpgsql
+(both O(n^2)).
 
 ## Analysis
 
@@ -57,10 +68,10 @@ PostgreSQL 13 to 17 the plx strbuild column would match plpgsql (both O(n^2)).
   cost; the translation happens once at `CREATE FUNCTION`. The small spread among
   the dialects is measurement noise.
 
-- Row iteration (iter): plpgsql, and therefore the plx dialects, are 3.7x to 5.6x
-  faster than plperl and plpython3u. plpgsql streams rows through a cursor and
-  reads columns directly, while the embedded interpreters copy each row into
-  their own data structures.
+- Row iteration (iter): plpgsql, and therefore the plx dialects, are 2.8x to 6.0x
+  faster than the embedded PLs (plperl, plpython3u, native plruby, native plphp).
+  plpgsql streams rows through a cursor and reads columns directly, while the
+  embedded interpreters copy each row into their own data structures.
 
 - String building (strbuild): concatenating onto a text variable in a loop
   (`s := s || 'x'`) is quadratic in plpgsql, because text is immutable and each
@@ -69,9 +80,11 @@ PostgreSQL 13 to 17 the plx strbuild column would match plpgsql (both O(n^2)).
   (`plx_strbuild`, see `../doc/` and `src/plx_strbuild.c`) whose append is
   amortized O(1), and the transpiler lowers the dialect append operators
   (`<<`, `.=`, `+=` on a string) onto it. The result is about 170x faster than
-  the stock plpgsql idiom and on par with the embedded interpreters' native
-  append. In hand-written plpgsql the same win is available by calling
-  `plx_sb_append`, or by assembling text in SQL with `string_agg` over a set.
+  the stock plpgsql idiom, and faster than the native PLs building the same
+  string with their own append (native plruby 53 ms, native plphp 14 ms), which
+  each materialize a fresh interpreter string per step. In hand-written plpgsql
+  the same win is available by calling `plx_sb_append`, or by assembling text in
+  SQL with `string_agg` over a set.
 
 - Arithmetic (arith): the embedded interpreters vary. plperl is fastest (native
   integer arithmetic), plpython3u is slowest, and plpgsql with the plx dialects
@@ -80,9 +93,9 @@ PostgreSQL 13 to 17 the plx strbuild column would match plpgsql (both O(n^2)).
 - Branching (branch): plpython3u is faster on this pure-CPU integer workload
   (0.72x); plperl and plpgsql with the plx dialects are close to each other.
 
-- Call overhead (call): plpgsql and the plx dialects are fastest. plperl and
-  plpython3u pay an SPI round trip per call and are slower even at one tenth the
-  iteration count.
+- Call overhead (call): plpgsql and the plx dialects are fastest. The embedded
+  PLs pay an SPI round trip per call and are slower even at one tenth the
+  iteration count (native plruby is the slowest here, at 2.97x).
 
 The transpile-to-plpgsql approach gives the plx dialects the performance profile
 of plpgsql: strong on set-oriented and SQL-bound work, competitive on procedural

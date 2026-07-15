@@ -296,6 +296,73 @@ for i in range(1,n+1):
 return s$x$;""", "SELECT b_call_py(%d)" % (CALL_N // 10), None),
 })
 
+
+# ---- native PL/Ruby (CommandPrompt) ----
+add("plruby", "plruby", {
+ "arith": ("""CREATE FUNCTION b_arith_nrb(n bigint) RETURNS bigint LANGUAGE plruby AS $x$
+s = 0
+(1..args[0]).each { |i| s += i }
+s
+$x$;""", "SELECT b_arith_nrb(%d)" % ARITH_N, None),
+ "strbuild": ("""CREATE FUNCTION b_str_nrb(n int) RETURNS int LANGUAGE plruby AS $x$
+s = ""
+args[0].times { s << "x" }
+s.length
+$x$;""", "SELECT b_str_nrb(%d)" % STR_N, str(STR_N)),
+ "iter": ("""CREATE FUNCTION b_iter_nrb() RETURNS bigint LANGUAGE plruby AS $x$
+s = 0
+r = spi_exec("SELECT v FROM bench_data")
+while (row = spi_fetch_row(r))
+  s += row['v'].to_i
+end
+s
+$x$;""", "SELECT b_iter_nrb()", None),
+ "branch": ("""CREATE FUNCTION b_branch_nrb(n int) RETURNS bigint LANGUAGE plruby AS $x$
+s = 0
+(1..args[0]).each { |i| m = i % 4
+  if m == 0 then s += 3 elsif m == 1 then s += 1 elsif m == 2 then s += 2 else s += 4 end }
+s
+$x$;""", "SELECT b_branch_nrb(%d)" % BRANCH_N, None),
+ "call": ("""CREATE FUNCTION b_leaf_nrb(x int) RETURNS int LANGUAGE plruby AS $x$ args[0] + 1 $x$;
+CREATE FUNCTION b_call_nrb(n int) RETURNS bigint LANGUAGE plruby AS $x$
+s = 0
+(1..args[0]).each { |i| s += spi_fetch_row(spi_exec("SELECT b_leaf_nrb(#{i})"))['b_leaf_nrb'].to_i }
+s
+$x$;""", "SELECT b_call_nrb(%d)" % (CALL_N // 10), None),
+})
+
+# ---- native PL/PHP (CommandPrompt) ----
+add("plphp", "plphp", {
+ "arith": ("""CREATE FUNCTION b_arith_nphp(n bigint) RETURNS bigint LANGUAGE plphp AS $x$
+$s = 0;
+for ($i = 1; $i <= $args[0]; $i++) { $s += $i; }
+return $s;
+$x$;""", "SELECT b_arith_nphp(%d)" % ARITH_N, None),
+ "strbuild": ("""CREATE FUNCTION b_str_nphp(n int) RETURNS int LANGUAGE plphp AS $x$
+$s = "";
+for ($i = 0; $i < $args[0]; $i++) { $s .= "x"; }
+return strlen($s);
+$x$;""", "SELECT b_str_nphp(%d)" % STR_N, str(STR_N)),
+ "iter": ("""CREATE FUNCTION b_iter_nphp() RETURNS bigint LANGUAGE plphp AS $x$
+$s = 0;
+$r = spi_exec("SELECT v FROM bench_data");
+while ($row = spi_fetch_row($r)) { $s += $row['v']; }
+return $s;
+$x$;""", "SELECT b_iter_nphp()", None),
+ "branch": ("""CREATE FUNCTION b_branch_nphp(n int) RETURNS bigint LANGUAGE plphp AS $x$
+$s = 0;
+for ($i = 1; $i <= $args[0]; $i++) { $m = $i % 4;
+  if ($m == 0) $s += 3; elseif ($m == 1) $s += 1; elseif ($m == 2) $s += 2; else $s += 4; }
+return $s;
+$x$;""", "SELECT b_branch_nphp(%d)" % BRANCH_N, None),
+ "call": ("""CREATE FUNCTION b_leaf_nphp(x int) RETURNS int LANGUAGE plphp AS $x$ return $args[0] + 1; $x$;
+CREATE FUNCTION b_call_nphp(n int) RETURNS bigint LANGUAGE plphp AS $x$
+$s = 0;
+for ($i = 1; $i <= $args[0]; $i++) { $row = spi_fetch_row(spi_exec("SELECT b_leaf_nphp($i)")); $s += $row['b_leaf_nphp']; }
+return $s;
+$x$;""", "SELECT b_call_nphp(%d)" % (CALL_N // 10), None),
+})
+
 WORKLOADS = ["arith", "strbuild", "iter", "branch", "call"]
 
 # setup
@@ -341,7 +408,7 @@ def cell(tag, w):
 
 hdr = ["language"] + WORKLOADS
 print("plx benchmark  (PostgreSQL 18.4, min of %d runs)\n" % REPS)
-print("workload sizes: arith=%d  strbuild=%d  iter=%d rows  branch=%d  call=%d (perl/py call=%d)\n"
+print("workload sizes: arith=%d  strbuild=%d  iter=%d rows  branch=%d  call=%d (embedded-PL call=%d)\n"
       % (ARITH_N, STR_N, ITER_ROWS, BRANCH_N, CALL_N, CALL_N // 10))
 w0 = 12
 print("  ".join([hdr[0].ljust(w0)] + [h.ljust(14) for h in hdr[1:]]))
@@ -349,4 +416,4 @@ print("-" * 90)
 for tag, _, _ in LANGS:
     print("  ".join([tag.ljust(w0)] + [cell(tag, w).ljust(14) for w in WORKLOADS]))
 print("\nx = relative to plpgsql (lower is faster). plx dialects transpile to plpgsql.")
-print("Note: perl/python 'call' uses 1/10 the iterations (per-call SPI is far slower).")
+print("Note: the embedded PLs' 'call' uses 1/10 the iterations (per-call SPI is far slower).")
