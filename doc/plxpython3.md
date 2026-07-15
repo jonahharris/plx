@@ -208,6 +208,25 @@ assert n > 0, "must be positive"
 - Ternary: Python's `a if c else b` is not supported; use an explicit `if`.
 - `None` becomes `NULL`.
 
+## Building strings in a loop
+
+Concatenating onto a string in a loop is slow in plpgsql: `s := s || 'x'` is
+O(n^2) because text is immutable and each step copies the whole string. Use `+=`
+on a string variable, which plx lowers to its string builder (`plx_strbuild`):
+
+```sql
+s = "" #:: text
+for row in query("SELECT name FROM t ORDER BY id"):
+    s += row.name
+    s += ","
+return s
+```
+
+On PostgreSQL 18 this is amortized O(1) per append. On PostgreSQL 13 to 17 it is
+correct but not accelerated (the in-place optimization needs a PostgreSQL 18
+feature). Note that `+=` is treated as string append only when the variable is a
+string; on a numeric variable it is numeric addition.
+
 ## Trigger functions
 
 A function returning `trigger` can be used as a trigger. Assign to `NEW` fields

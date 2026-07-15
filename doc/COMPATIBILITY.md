@@ -6,14 +6,27 @@ plx supports PostgreSQL 13 through 18. The full pg_regress suite (plxruby,
 plxphp, plxjs, plxpython3, and the rejection tests) passes on each of PostgreSQL
 13, 14, 15, 16, 17, and 18.
 
-| PostgreSQL | Status |
-|------------|--------|
-| 13 | pass |
-| 14 | pass |
-| 15 | pass |
-| 16 | pass |
-| 17 | pass |
-| 18 | pass |
+| PostgreSQL | Status | string builder |
+|------------|--------|----------------|
+| 13 | pass | correct, not accelerated |
+| 14 | pass | correct, not accelerated |
+| 15 | pass | correct, not accelerated |
+| 16 | pass | correct, not accelerated |
+| 17 | pass | correct, not accelerated |
+| 18 | pass | accelerated (amortized O(1)) |
+
+## The string builder is accelerated only on PostgreSQL 18
+
+plx ships a string builder (`plx_strbuild`) and lowers the dialect string-append
+operators onto it, so building a string in a loop is amortized O(1) instead of
+the O(n^2) of `s := s || 'x'`. The in-place append relies on
+`SupportRequestModifyInPlace`, which was introduced in PostgreSQL 18. On
+PostgreSQL 13 to 17 the builder produces correct results, but the append is
+O(n^2), the same as plain concatenation, because those versions only let the
+built-in array functions take a read-write expanded argument. The transpiler
+lowers to the builder on every version (the results are always correct); the
+speedup appears when running on PostgreSQL 18. See
+[../bench/BENCHMARKS.md](../bench/BENCHMARKS.md).
 
 ## Why the version range holds
 

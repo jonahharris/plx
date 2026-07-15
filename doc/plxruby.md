@@ -249,6 +249,26 @@ assert(n > 0, "must be positive")
 - Casts: `x.to_i`, `x.to_s`, `x.to_f` become `::integer`, `::text`,
   `::double precision`. `nil` becomes `NULL`.
 
+## Building strings in a loop
+
+Concatenating onto a string in a loop is slow in plpgsql: `s := s || 'x'` is
+O(n^2) because text is immutable and each step copies the whole string. Use the
+append operator `<<`, which plx lowers to its string builder (`plx_strbuild`):
+
+```sql
+s = "" #:: text
+query("SELECT name FROM t ORDER BY id").each do |row|
+  s << row.name
+  s << ","
+end
+return s
+```
+
+On PostgreSQL 18 this is amortized O(1) per append. On PostgreSQL 13 to 17 it is
+correct but not accelerated (the in-place optimization needs a PostgreSQL 18
+feature). Alternatively, assemble text in SQL with `string_agg` when the pieces
+come from a query.
+
 ## Trigger functions
 
 A function returning `trigger` can be used as a trigger. Assign to `NEW` fields

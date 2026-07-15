@@ -46,7 +46,9 @@ Times are milliseconds; the multiplier is relative to plpgsql (lower is faster).
 In the strbuild column, native plpgsql is the `s := s || 'x'` baseline and the
 plx dialects use the builder. This is the intended native-versus-plx comparison:
 the same accumulation idiom is 1597 ms in stock plpgsql and about 10 ms in the
-plx dialects.
+plx dialects. These numbers are on PostgreSQL 18; the builder's amortized-O(1)
+append requires PostgreSQL 18 (see the version note under String building). On
+PostgreSQL 13 to 17 the plx strbuild column would match plpgsql (both O(n^2)).
 
 ## Analysis
 
@@ -86,7 +88,9 @@ The transpile-to-plpgsql approach gives the plx dialects the performance profile
 of plpgsql: strong on set-oriented and SQL-bound work, competitive on procedural
 arithmetic and branching, and with no additional language runtime loaded into the
 backend. In-loop string building, the one case where plpgsql is weak, is handled
-by the string builder, which brings it on par with the embedded interpreters.
+by the string builder, which brings it on par with the embedded interpreters on
+PostgreSQL 18 (on PostgreSQL 13 to 17 the builder is correct but not accelerated,
+so that case remains O(n^2)).
 
 ## Native PL/Ruby and PL/PHP build notes
 

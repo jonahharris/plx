@@ -124,8 +124,17 @@ $$;
 Because functions execute as plpgsql, all four plx dialects match plpgsql
 (within about 11 percent across five workloads) and inherit its performance
 profile: 3.7x to 5.6x faster than the embedded-interpreter PLs on row iteration,
-competitive on arithmetic and branching, and weak on naive in-loop string
-building (a plpgsql limitation). Full results and method are in
+and competitive on arithmetic and branching.
+
+The one place plpgsql is weak is building a string in a loop: `s := s || 'x'`
+is O(n^2) because text is immutable and each step copies the whole string. plx
+addresses this with a string builder (`plx_strbuild`, an expanded-object type
+with amortized-O(1) append) and lowers the dialect append operators (`s << x`,
+`$s .= x`, `s += x` on a string) onto it. On PostgreSQL 18 this makes in-loop
+string building about 170x faster than the plpgsql idiom and on par with the
+embedded interpreters. The in-place optimization needs a PostgreSQL 18 feature
+(`SupportRequestModifyInPlace`); on PostgreSQL 13 to 17 the builder is correct
+but not accelerated. Full results and method are in
 [bench/BENCHMARKS.md](bench/BENCHMARKS.md).
 
 ## Layout
