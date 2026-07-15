@@ -1,0 +1,47 @@
+name: pgxn-dist
+
+# Build the PGXN distribution zip (a git-archive of the tag, versioned from
+# META.json, with the PGXN-required top-level plx-<version>/ directory) and
+# attach it to each published GitHub release. workflow_dispatch allows attaching
+# it to an existing tag on demand.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to attach the PGXN zip to (e.g. v1.2)'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  attach:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve the release tag
+        id: tag
+        run: echo "tag=${{ github.event.release.tag_name || github.event.inputs.tag }}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.tag.outputs.tag }}
+
+      - name: Build the PGXN distribution zip
+        id: build
+        run: |
+          set -euo pipefail
+          version=$(jq -r .version META.json)
+          zip="plx-${version}.zip"
+          git archive --format=zip --prefix="plx-${version}/" -o "$zip" HEAD
+          # sanity: the version inside the zip must match META.json
+          unzip -p "$zip" "plx-${version}/META.json" \
+            | jq -e --arg v "$version" '.version == $v' >/dev/null
+          echo "zip=$zip" >> "$GITHUB_OUTPUT"
+
+      - name: Attach the zip to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ steps.tag.outputs.tag }}" "${{ steps.build.outputs.zip }}" --clobber --repo "${{ github.repository }}"
