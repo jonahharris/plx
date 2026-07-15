@@ -105,6 +105,39 @@ by the string builder, which brings it on par with the embedded interpreters on
 PostgreSQL 18 (on PostgreSQL 13 to 17 the builder is correct but not accelerated,
 so that case remains O(n^2)).
 
+## String builder: PostgreSQL 18 versus 17
+
+The builder's in-place append relies on `SupportRequestModifyInPlace`, a planner
+support-request kind added in PostgreSQL 18. On PostgreSQL 13 to 17 that request
+does not exist, so each append flattens and copies the buffer and the total build
+is O(n^2), the same shape as the plpgsql `s := s || 'x'` idiom. The result is
+still correct; only the acceleration is absent. Building a string one character
+at a time (min of 3 runs, same container):
+
+PostgreSQL 17.10 (the builder tracks plpgsql, both O(n^2)):
+
+| n       | plpgsql `\|\|` | plx builder |
+|---------|--------------|-------------|
+| 25,000  | 7.6 ms       | 8.8 ms      |
+| 50,000  | 41.1 ms      | 55.8 ms     |
+| 100,000 | 218.6 ms     | 318.9 ms    |
+| 200,000 | 1082.2 ms    | 1040.8 ms   |
+
+PostgreSQL 18.4 (the builder is linear, plpgsql stays quadratic):
+
+| n       | plpgsql `\|\|` | plx builder |
+|---------|--------------|-------------|
+| 25,000  | 14.8 ms      | 1.0 ms      |
+| 50,000  | 65.3 ms      | 2.1 ms      |
+| 100,000 | 307.7 ms     | 4.2 ms      |
+| 200,000 | 1464.6 ms    | 8.3 ms      |
+
+On PostgreSQL 18 the builder's time doubles as n doubles (1.0, 2.1, 4.2, 8.3 ms),
+confirming O(n); the plpgsql baseline roughly quadruples. On PostgreSQL 17 both
+columns roughly quadruple per doubling of n, confirming that the builder is not
+accelerated there. The full regression suite (including the string-builder
+correctness tests) passes on both versions.
+
 ## Native PL/Ruby and PL/PHP build notes
 
 The comparison against the third-party native PL/Ruby and PL/PHP is documented in
