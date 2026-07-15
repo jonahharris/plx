@@ -1,6 +1,39 @@
-/* plx 1.0: registers the plxruby and plxphp languages (bodies transpile to plpgsql) */
+/* plx 1.0: registers the plx dialect languages and the string-builder type */
 
 \echo Use "CREATE EXTENSION plx" to load this file. \quit
+
+/*
+ * plx_strbuild: an expanded-object string builder. Its flattened form is a
+ * text-compatible varlena, so it casts to and from text without a function.
+ * plx_sb_append grows the buffer in place across a loop (amortized O(1)),
+ * avoiding the quadratic cost of `s := s || 'x'` on plain text.
+ */
+CREATE TYPE plx_strbuild;
+
+CREATE FUNCTION plx_sb_in(cstring) RETURNS plx_strbuild
+	AS '$libdir/plx', 'plx_sb_in' LANGUAGE C IMMUTABLE STRICT;
+CREATE FUNCTION plx_sb_out(plx_strbuild) RETURNS cstring
+	AS '$libdir/plx', 'plx_sb_out' LANGUAGE C IMMUTABLE STRICT;
+
+CREATE TYPE plx_strbuild (
+	INPUT = plx_sb_in,
+	OUTPUT = plx_sb_out,
+	LIKE = text,
+	STORAGE = extended
+);
+
+CREATE FUNCTION plx_sb_append_support(internal) RETURNS internal
+	AS '$libdir/plx', 'plx_sb_append_support' LANGUAGE C;
+
+CREATE FUNCTION plx_sb_append(plx_strbuild, text) RETURNS plx_strbuild
+	AS '$libdir/plx', 'plx_sb_append' LANGUAGE C IMMUTABLE
+	SUPPORT plx_sb_append_support;
+
+-- plx_strbuild is implicitly usable as text (so it works in RETURN, string
+-- functions, and concatenation). text becomes a builder only in assignment
+-- context, which avoids operator ambiguity such as `builder || text`.
+CREATE CAST (plx_strbuild AS text) WITHOUT FUNCTION AS IMPLICIT;
+CREATE CAST (text AS plx_strbuild) WITHOUT FUNCTION AS ASSIGNMENT;
 
 /*
  * Runtime call handler = plpgsql's OWN handler. Binding a fresh pg_proc row to
