@@ -305,6 +305,23 @@ ASSERT N > 0
 - Comparisons use SQL three-valued logic. Use `IS NULL` / `IS NOT NULL` to test
   for null.
 
+## Trigger functions
+
+A function returning `trigger` can be used as a trigger. Assign to `NEW` fields
+with `MOVE` (or `COMPUTE`) and return `NEW`:
+
+```sql
+CREATE FUNCTION stamp() RETURNS trigger LANGUAGE plxcobol AS $$
+PROCEDURE DIVISION.
+    MOVE "row" TO NEW.TAG
+    GOBACK RETURNING NEW.
+$$;
+```
+
+`NEW`, `OLD`, and the `TG_` variables are available. Assigning to a record field
+(`MOVE e TO NEW.COL`) works because a qualified name maps to `new.col`; a bare
+`MOVE e TO NEW` is not supported.
+
 ## Semantic differences
 
 These are intentional. plx pins semantics to SQL and plpgsql.

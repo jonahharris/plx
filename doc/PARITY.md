@@ -1,86 +1,101 @@
 # plx / plpgsql Feature Parity
 
-Target: every plpgsql capability is expressible in each plx dialect (plxruby,
-plxphp, plxjs, plxpython3, plxcobol). The reference is the plpgsql statement set
-in `src/pl/plpgsql/src/plpgsql.h` (`PLpgSQL_stmt_*`) plus its declaration forms.
+Target: every plpgsql capability is expressible in each plx dialect. The
+reference is the plpgsql statement set in `src/pl/plpgsql/src/plpgsql.h`
+(`PLpgSQL_stmt_*`) plus its declaration forms.
 
-Legend: done / partial / todo. All dialects track the same status unless noted.
-The `dialect syntax` column shows the curly-brace and scripting dialects; the
-COBOL spellings are listed separately under "plxcobol" below.
+Every construct below is supported in all five dialects — **plxruby**,
+**plxphp**, **plxjs**, **plxpython3**, **plxcobol** — except where a footnote
+notes an equivalent form. The cells show the dialect spelling; full syntax and
+semantics are in the per-dialect chapters ([plxruby](plxruby.md),
+[plxphp](plxphp.md), [plxjs](plxjs.md), [plxpython3](plxpython3.md),
+[plxcobol](plxcobol.md)).
 
-| plpgsql construct | plx status | dialect syntax |
-|---|---|---|
-| assignment (`:=`) | done | `x = e` / `$x = e;` / `x = e;` |
-| `IF / ELSIF / ELSE` | done | if/elsif(elseif/else if)/else |
-| `CASE` (simple + searched) | done | `case/when`, `switch/case` |
-| `LOOP` | done | `loop do` / (while true) |
-| `WHILE` | done | while / until |
-| `FOR` integer | done | `for i in 1..n` / C-for |
-| `FOR` over query | done | `query(sql).each` / `foreach`/`for..of` |
-| `FOR` over dynamic query | done | same, non-literal SQL or binds |
-| `EXIT` / `CONTINUE` (+ labels) | done | next/break (+ `WHEN`); `label: <loop>` and `break label` |
-| `RETURN` / `RETURN NEXT` / `RETURN QUERY` | done | return / emit / return_query |
-| `RAISE` | done | raise / throw |
-| `ASSERT` | done | `assert(cond[, msg])` |
-| `PERFORM` | done | `perform(sql)` |
-| `EXECUTE` (dynamic) | done | `execute(sql, args)` |
-| SQL statement / `SELECT INTO` | done | `fetch_one` / perform / execute |
-| `GET DIAGNOSTICS` (ROW_COUNT) | done | `x = row_count()` |
-| `FOUND` | done | `found()` / `found?` |
-| `GET STACKED DIAGNOSTICS` | done | `e.message`, `e.sqlstate`, `e.detail`, `e.hint`, `e.constraint`, `e.column`, `e.table`, `e.schema`, `e.datatype` |
-| `CALL` procedure | done | `call("proc", args)` |
-| `COMMIT` / `ROLLBACK` | done | `commit()` / `rollback()` |
-| `FOREACH` over array | done | `arr.each` / `foreach($a as $v)` / `for (v of arr)` (v annotated) |
-| cursors: `OPEN`/`FETCH`/`MOVE`/`CLOSE` | done | `open_cursor(sql)`, `fetch_from(c)`, `move_cursor(c[,n])`, `close_cursor(c)` |
-| declarations: `CONSTANT` | done | annotation suffix `const` (e.g. `x = 5 #:: int const`) |
-| declarations: `%TYPE` / `%ROWTYPE` | done | annotation type text (e.g. `e #:: tbl%ROWTYPE`) |
-| nested block with local `DECLARE` | by design | locals are function-scoped (matches Ruby method / JS var / PHP function scope); `begin/rescue` provides a nested BEGIN/EXCEPTION block sharing that scope |
+## Control flow
 
-This file is updated as constructs land.
+| plpgsql | plxruby | plxphp | plxjs | plxpython3 | plxcobol |
+|---|---|---|---|---|---|
+| assignment (`:=`) | `x = e` | `$x = e;` | `x = e;` | `x = e` | `MOVE e TO x` · `COMPUTE x = e` |
+| `IF`/`ELSIF`/`ELSE` | `if`/`elsif`/`else`/`end` | `if`/`elseif`/`else` | `if`/`else if`/`else` | `if`/`elif`/`else:` | `IF`/`ELSE`/`END-IF` |
+| simple `CASE` | `case x`/`when` | `switch`/`case` | `switch`/`case` | if/elif ¹ | `EVALUATE`/`WHEN` |
+| searched `CASE` | `case`/`when` (no subject) | if/else ¹ | if/else ¹ | if/elif ¹ | `EVALUATE TRUE`/`WHEN` |
+| `LOOP` | `loop do`/`end` | `while (true)` | `while (true)` | `while True:` | `PERFORM`/`END-PERFORM` |
+| `WHILE` | `while` · `until` | `while` | `while` | `while` | `PERFORM UNTIL c` |
+| integer `FOR` | `for i in 1..n` | `for ($i=…; …; $i++)` | `for (let i=…; …; i++)` | `for i in range(…)` | `PERFORM VARYING` · `PERFORM n TIMES` |
+| `FOR` over query | `query(sql).each do \|r\|` | `foreach (query(sql) as $r)` | `for (const r of query(sql))` | `for r in query(sql):` | `PERFORM r OVER "sql"` |
+| `FOR` over dynamic query | same, non-literal SQL / binds | same | same | same | `… OVER "sql" USING …` |
+| `FOREACH` over array | `arr.each do \|v\|` | `foreach ($a as $v)` | `for (const v of arr)` | `for v in arr:` | `PERFORM v OVER ARRAY a` |
+| `EXIT` / `CONTINUE` | `break` / `next` | `break` / `continue` | `break` / `continue` | `break` / `continue` | `EXIT PERFORM` / `EXIT PERFORM CYCLE` |
+| loop labels ² | `label:` + `break label` | `label:` + `break label` | `label:` (native) | — | — |
 
-## plxcobol
+¹ Python has no `match`/`case`, and PHP/JS `switch` is a simple `CASE` only, so a
+searched (arbitrary-condition) or Python multi-way branch uses `if`/`elif`(`else
+if`)/`else` — the same control flow, lowered to plpgsql `IF`. Ruby `case` and
+COBOL `EVALUATE` / `EVALUATE TRUE` express both simple and searched `CASE`
+directly.
+² Loop labels (`label:` before a loop with `break label` / `next label`) are
+native in JavaScript and a plx extension in Ruby and PHP; not offered in Python
+or COBOL.
 
-plxcobol (ISO/IEC 1989:2023) reaches every row above. Because COBOL is
-verb-driven, the spellings differ:
+## Return, SQL, and data access
 
-| plpgsql construct | plxcobol syntax |
-|---|---|
-| assignment | `MOVE e TO v`, `COMPUTE v = e`, `ADD`/`SUBTRACT`/`MULTIPLY`/`DIVIDE` |
-| `IF` / `ELSE` | `IF ... ELSE ... END-IF` |
-| `CASE` (simple + searched) | `EVALUATE ... END-EVALUATE`, `EVALUATE TRUE ...` |
-| `LOOP` / `WHILE` | `PERFORM ... END-PERFORM`, `PERFORM UNTIL c ...` |
-| `FOR` integer | `PERFORM VARYING v FROM a BY s UNTIL c`, `PERFORM n TIMES` |
-| `FOR` over query / dynamic | `PERFORM row OVER "sql" [USING ...]` |
-| `FOREACH` over array | `PERFORM v OVER ARRAY e` |
-| `EXIT` / `CONTINUE` | `EXIT PERFORM`, `EXIT PERFORM CYCLE`, `CONTINUE` (no-op) |
-| `RETURN` / `NEXT` / `QUERY` | `GOBACK RETURNING e`, `RETURN-NEXT e`, `RETURN-QUERY "sql"` |
-| `RAISE` | `RAISE <level> "msg" [SQLSTATE "code"]`, `DISPLAY` (notice) |
-| `ASSERT` | `ASSERT c` |
-| `EXECUTE` / `SELECT INTO` | `EXECUTE "sql" [USING ...] [INTO ...]` |
-| `GET DIAGNOSTICS` / `FOUND` | `GET ROW-COUNT INTO v`, `FOUND` |
-| `GET STACKED DIAGNOSTICS` | `GET MESSAGE`/`DETAIL`/`HINT`/`SQLSTATE`/`CONTEXT INTO v` |
-| exception handling | `BEGIN-TRY ... WHEN <cond>|OTHER ... END-TRY` |
-| cursors | `OPEN-CURSOR`, `FETCH-CURSOR`, `MOVE-CURSOR`, `CLOSE-CURSOR` |
-| `CALL` procedure | `CALL "proc" USING ...` |
-| `COMMIT` / `ROLLBACK` | `COMMIT`, `ROLLBACK` |
-| declarations: `CONSTANT` | `01 NAME CONSTANT AS lit` |
-| declarations: `%TYPE`/`%ROWTYPE` | `01 NAME TYPE tbl%ROWTYPE` |
+| plpgsql | plxruby | plxphp | plxjs | plxpython3 | plxcobol |
+|---|---|---|---|---|---|
+| `RETURN` | `return e` | `return $e;` | `return e;` | `return e` | `GOBACK RETURNING e` |
+| `RETURN NEXT` | `emit e` · `return_next e` | `return_next($e)` | `return_next(e)` | `return_next(e)` | `RETURN-NEXT e` |
+| `RETURN QUERY` | `return_query(sql)` | `return_query(sql)` | `return_query(sql)` | `return_query(sql)` | `RETURN-QUERY "sql"` |
+| `PERFORM` | `perform(sql)` | `perform(sql)` | `perform(sql)` | `perform(sql)` | `EXECUTE "sql"` |
+| `EXECUTE` (dynamic) | `execute(sql, a)` | `execute(sql, $a)` | `execute(sql, a)` | `execute(sql, a)` | `EXECUTE "sql" USING a` |
+| SQL / `SELECT INTO` | `fetch_one(sql)` · `fetch_one!` | `fetch_one(sql)` | `fetch_one(sql)` | `fetch_one(sql)` | `EXECUTE "sql" INTO v` |
+| cursors `OPEN`/`FETCH`/`MOVE`/`CLOSE` | `open_cursor` · `fetch_from` · `move_cursor` · `close_cursor` | (same call form) | (same call form) | (same call form) | `OPEN-` · `FETCH-` · `MOVE-` · `CLOSE-CURSOR` |
+| `CALL` procedure | `call("p", a)` | `call("p", $a)` | `call("p", a)` | `call("p", a)` | `CALL "p" USING a` |
+| `COMMIT` / `ROLLBACK` | `commit()` / `rollback()` | (same) | (same) | (same) | `COMMIT` / `ROLLBACK` |
 
-Loop labels have no COBOL equivalent and are not offered in plxcobol; the other
-dialects keep the `label:` extension. Types are declared from `PICTURE` clauses
-or a `TYPE` clause (see [plxcobol.md](plxcobol.md)).
+The call-form intrinsics (`perform`, `execute`, `fetch_one`, the `*_cursor`
+functions, `call`, `commit`, `rollback`, `return_next`, `return_query`) share the
+same name in plxruby, plxphp, plxjs, and plxpython3; only the argument sigils and
+string-literal/interpolation syntax differ. COBOL uses dedicated verbs.
+
+## Errors and diagnostics
+
+| plpgsql | plxruby | plxphp | plxjs | plxpython3 | plxcobol |
+|---|---|---|---|---|---|
+| `RAISE` | `raise "m"` · `raise notice: "m"` | `throw …` · `raise("notice", "m")` | `throw …` · `raise("notice", "m")` | `raise ValueError(…)` · `raise("notice", "m")` | `RAISE <level> "m"` · `DISPLAY` |
+| `ASSERT` | `assert(c, m)` | `assert(c, m)` | `assert(c, m)` | `assert c, m` | `ASSERT c` |
+| exception handling | `begin`/`rescue`/`ensure`/`end` | `try`/`catch`/`finally` | `try`/`catch`/`finally` | `try`/`except`/`finally` | `BEGIN-TRY`/`WHEN`/`END-TRY` |
+| `GET DIAGNOSTICS` (`ROW_COUNT`) | `row_count()` | `row_count()` | `row_count()` | `row_count()` | `GET ROW-COUNT INTO v` |
+| `FOUND` | `found?` | `found()` | `found()` | `found()` | `FOUND` |
+| `GET STACKED DIAGNOSTICS` | `e.message` · `e.detail` · … | `$e->message` · `$e->detail` · … | `e.message` · `e.detail` · … | `e.message` · `e.detail` · … | `GET MESSAGE` · `GET DETAIL` · … `INTO v` |
+
+Stacked-diagnostics fields available in all dialects: `message` (`SQLERRM`),
+`sqlstate` (`SQLSTATE`), `detail`, `hint`, `constraint`, `column`, `table`,
+`schema`, `datatype`. A specific condition is caught by name
+(`PG::UniqueViolation` / `\PG::UniqueViolation` / `WHEN unique-violation`).
+
+## Declarations and triggers
+
+| plpgsql | plxruby | plxphp | plxjs | plxpython3 | plxcobol |
+|---|---|---|---|---|---|
+| `CONSTANT` | `x = 5 #:: int const` | `$x = 5 /*:: int const */` | `let x = 5 /*:: int const */` | `x = 5  #:: int const` | `01 X CONSTANT AS 5` |
+| `%TYPE` / `%ROWTYPE` | `e #:: t%ROWTYPE` | `$e /*:: t%ROWTYPE */` | `let e /*:: t%ROWTYPE */` | `e #:: t%ROWTYPE` | `01 E TYPE t%ROWTYPE` |
+| trigger (`NEW`/`OLD`/`TG_`) | `NEW.col = e`; `return NEW` | `$NEW->col = e; return $NEW;` | `NEW.col = e; return NEW;` | `NEW.col = e`; `return NEW` | `MOVE e TO NEW.col`; `GOBACK RETURNING NEW` |
+| nested block `DECLARE` ³ | function-scoped | function-scoped | function-scoped | function-scoped | function-scoped |
+
+³ Locals are function-scoped in every dialect, matching the source language's
+scoping (Ruby method locals, JavaScript `var`, PHP function scope, Python
+function scope, COBOL `WORKING-STORAGE`). plpgsql's per-block `DECLARE` is not a
+separate construct; an exception block (`begin/rescue`, `try/catch`, `BEGIN-TRY`)
+provides the nested `BEGIN/EXCEPTION/END` structure sharing the function scope.
 
 ## Notes
 
-- Trigger functions: a function returning `trigger` runs as a trigger. `NEW`,
-  `OLD`, and the `TG_` variables are available, and assignment to a record field
-  (`NEW.col = e`) or an array element (`arr[i] = e`) is supported. This is the
-  qualified/subscripted lvalue form; a bare `NEW = e` is not.
-- Variable scope: plx locals are function-scoped, which matches the natural
-  scoping of the source languages (Ruby method locals, JavaScript `var`, PHP
-  function scope). plpgsql's per-block `DECLARE` is not exposed as a separate
-  construct; a `begin/rescue` (`try/catch`) block gives the nested
-  `BEGIN/EXCEPTION/END` structure and shares the function scope.
-- Labels: `label: <loop>` before a loop and `break label` / `next label` lower
-  to plpgsql `<<label>>` and `EXIT label` / `CONTINUE label`. The `label:` prefix
-  is native in JavaScript and is accepted as a plx extension in Ruby and PHP.
+- Type inference: an integer, numeric, text, or boolean literal infers the local
+  type in plxruby/plxphp/plxjs/plxpython3; otherwise annotate it (`#:: type`,
+  `/*:: type */`). plxcobol declares types from `WORKING-STORAGE` `PICTURE`
+  clauses or a `TYPE` clause.
+- Trigger functions: a function returning `trigger` runs as a trigger in every
+  dialect. `NEW`, `OLD`, and the `TG_` variables are available, and assignment to
+  a record field (`NEW.col = e`) or array element is supported (the
+  qualified/subscripted lvalue form; a bare `NEW = e` is not).
+
+This file is updated as constructs land.
