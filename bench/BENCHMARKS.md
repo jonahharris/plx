@@ -8,7 +8,9 @@ Five workloads were measured on PostgreSQL 18.4 in the development container
 - arith: accumulate the integers 1 to 2,000,000 in a loop (loop dispatch and
   integer arithmetic).
 - strbuild: build a 200,000-character string one character at a time in a loop
-  (text handling with the natural in-language idiom for each language).
+  (text handling with the natural in-language idiom for each language). plpgsql
+  uses `s := s || 'x'`. The plx dialects use their append operator (`s << 'x'`,
+  `$s .= 'x'`, `s += 'x'`), which plx lowers to the plx_strbuild builder.
 - iter: sum a `bigint` column over a 1,000,000-row table (SPI and per-row
   marshalling).
 - branch: a four-way conditional per element over 2,000,000 elements (branch
@@ -33,13 +35,18 @@ Times are milliseconds; the multiplier is relative to plpgsql (lower is faster).
 
 | language   | arith        | strbuild     | iter          | branch        | call          |
 |------------|--------------|--------------|---------------|---------------|---------------|
-| plpgsql    | 53 (1.00x)   | 1710 (1.00x) | 95 (1.00x)    | 158 (1.00x)   | 166 (1.00x)   |
-| plxruby    | 56 (1.06x)   | 1725 (1.01x) | 95 (1.00x)    | 156 (0.99x)   | 157 (0.95x)   |
-| plxphp     | 54 (1.02x)   | 1741 (1.02x) | 99 (1.04x)    | 161 (1.02x)   | 160 (0.97x)   |
-| plxjs      | 54 (1.03x)   | 1783 (1.04x) | 99 (1.04x)    | 171 (1.08x)   | 173 (1.04x)   |
-| plxpython3 | 59 (1.11x)   | 1729 (1.01x) | 99 (1.05x)    | 157 (1.00x)   | 163 (0.98x)   |
-| plperl     | 46 (0.86x)   | 12 (0.01x)   | 535 (5.63x)   | 159 (1.01x)   | 301 (1.82x)   |
-| plpython3u | 73 (1.39x)   | 16 (0.01x)   | 351 (3.69x)   | 113 (0.72x)   | 181 (1.09x)   |
+| plpgsql    | 48 (1.00x)   | 1597 (1.00x) | 88 (1.00x)    | 150 (1.00x)   | 145 (1.00x)   |
+| plxruby    | 50 (1.06x)   | 9 (0.01x)    | 97 (1.10x)    | 153 (1.02x)   | 151 (1.05x)   |
+| plxphp     | 52 (1.09x)   | 9 (0.01x)    | 99 (1.11x)    | 154 (1.02x)   | 149 (1.03x)   |
+| plxjs      | 51 (1.07x)   | 10 (0.01x)   | 94 (1.06x)    | 154 (1.03x)   | 153 (1.06x)   |
+| plxpython3 | 53 (1.12x)   | 10 (0.01x)   | 99 (1.12x)    | 154 (1.03x)   | 149 (1.03x)   |
+| plperl     | 42 (0.88x)   | 12 (0.01x)   | 507 (5.74x)   | 139 (0.93x)   | 273 (1.89x)   |
+| plpython3u | 64 (1.35x)   | 14 (0.01x)   | 337 (3.81x)   | 108 (0.72x)   | 165 (1.14x)   |
+
+In the strbuild column, native plpgsql is the `s := s || 'x'` baseline and the
+plx dialects use the builder. This is the intended native-versus-plx comparison:
+the same accumulation idiom is 1597 ms in stock plpgsql and about 10 ms in the
+plx dialects.
 
 ## Analysis
 
@@ -53,13 +60,16 @@ Times are milliseconds; the multiplier is relative to plpgsql (lower is faster).
   reads columns directly, while the embedded interpreters copy each row into
   their own data structures.
 
-- String building (strbuild): this is a plpgsql weakness that plx inherits.
-  Concatenating onto a text variable in a loop (`s := s || 'x'`) is quadratic,
-  because each step rebuilds the whole string; plpgsql has no in-language string
-  builder. plperl and plpython3u use an efficient append or list-join and are
-  about 100x faster here. For text assembly over many pieces, build the string in
-  SQL instead (for example `string_agg` over a set) rather than character by
-  character in a loop.
+- String building (strbuild): concatenating onto a text variable in a loop
+  (`s := s || 'x'`) is quadratic in plpgsql, because text is immutable and each
+  step rebuilds the whole string. This is the one workload where plx does not
+  simply match plpgsql: plx ships an expanded-object string builder
+  (`plx_strbuild`, see `../doc/` and `src/plx_strbuild.c`) whose append is
+  amortized O(1), and the transpiler lowers the dialect append operators
+  (`<<`, `.=`, `+=` on a string) onto it. The result is about 170x faster than
+  the stock plpgsql idiom and on par with the embedded interpreters' native
+  append. In hand-written plpgsql the same win is available by calling
+  `plx_sb_append`, or by assembling text in SQL with `string_agg` over a set.
 
 - Arithmetic (arith): the embedded interpreters vary. plperl is fastest (native
   integer arithmetic), plpython3u is slowest, and plpgsql with the plx dialects
@@ -74,8 +84,9 @@ Times are milliseconds; the multiplier is relative to plpgsql (lower is faster).
 
 The transpile-to-plpgsql approach gives the plx dialects the performance profile
 of plpgsql: strong on set-oriented and SQL-bound work, competitive on procedural
-arithmetic and branching, weak on naive in-loop string building, and with no
-additional language runtime loaded into the backend.
+arithmetic and branching, and with no additional language runtime loaded into the
+backend. In-loop string building, the one case where plpgsql is weak, is handled
+by the string builder, which brings it on par with the embedded interpreters.
 
 ## Native PL/Ruby and PL/PHP build notes
 

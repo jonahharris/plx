@@ -91,7 +91,7 @@ $x$;""", "SELECT b_arith_xrb(%d)" % ARITH_N, None),
  "strbuild": ("""CREATE FUNCTION b_str_xrb(n int) RETURNS int LANGUAGE plxruby AS $x$
 s = "" #:: text
 for i in 1..n
-  s = "#{s}x"
+  s << "x"
 end
 return length(s)
 $x$;""", "SELECT b_str_xrb(%d)" % STR_N, str(STR_N)),
@@ -136,7 +136,7 @@ return $s;
 $x$;""", "SELECT b_arith_xphp(%d)" % ARITH_N, None),
  "strbuild": ("""CREATE FUNCTION b_str_xphp(n int) RETURNS int LANGUAGE plxphp AS $x$
 $s = "" /*:: text */;
-for ($i = 1; $i <= $n; $i++) { $s = "{$s}x"; }
+for ($i = 1; $i <= $n; $i++) { $s .= "x"; }
 return length($s);
 $x$;""", "SELECT b_str_xphp(%d)" % STR_N, str(STR_N)),
  "iter": ("""CREATE FUNCTION b_iter_xphp() RETURNS bigint LANGUAGE plxphp AS $x$
@@ -171,7 +171,7 @@ return s;
 $x$;""", "SELECT b_arith_xjs(%d)" % ARITH_N, None),
  "strbuild": ("""CREATE FUNCTION b_str_xjs(n int) RETURNS int LANGUAGE plxjs AS $x$
 let s = "" /*:: text */;
-for (let i = 1; i <= n; i++) { s = `${s}x`; }
+for (let i = 1; i <= n; i++) { s += "x"; }
 return length(s);
 $x$;""", "SELECT b_str_xjs(%d)" % STR_N, str(STR_N)),
  "iter": ("""CREATE FUNCTION b_iter_xjs() RETURNS bigint LANGUAGE plxjs AS $x$
@@ -208,7 +208,7 @@ $x$;""", "SELECT b_arith_xpy(%d)" % ARITH_N, None),
  "strbuild": ("""CREATE FUNCTION b_str_xpy(n int) RETURNS int LANGUAGE plxpython3 AS $x$
 s = "" #:: text
 for i in range(1, n + 1):
-    s = f"{s}x"
+    s += "x"
 return length(s)
 $x$;""", "SELECT b_str_xpy(%d)" % STR_N, str(STR_N)),
  "iter": ("""CREATE FUNCTION b_iter_xpy() RETURNS bigint LANGUAGE plxpython3 AS $x$
