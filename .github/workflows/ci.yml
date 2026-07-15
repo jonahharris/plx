@@ -35,9 +35,15 @@ jobs:
 
       - name: Start the server and prepare a superuser role
         run: |
-          sudo pg_ctlcluster ${{ matrix.pg }} main start
-          # the target cluster's port (the runner may have another cluster too)
+          # PGDG packages do not auto-create the cluster on the runner; create it
+          # if missing (ignore if it already exists, e.g. a preinstalled version),
+          # then ensure it is running.
+          sudo pg_createcluster ${{ matrix.pg }} main --start 2>/dev/null || true
+          sudo pg_ctlcluster ${{ matrix.pg }} main start 2>/dev/null || true
+          pg_lsclusters
+          # the target cluster's port (the runner may carry another cluster too)
           port=$(pg_lsclusters -h | awk '$1=="${{ matrix.pg }}" && $2=="main"{print $3}')
+          test -n "$port"
           sudo -u postgres createuser --superuser --port "$port" "$USER"
           echo "PGHOST=/var/run/postgresql" >> "$GITHUB_ENV"
           echo "PGPORT=$port" >> "$GITHUB_ENV"
