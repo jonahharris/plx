@@ -1,31 +1,53 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 530 244" width="530" height="244" role="img" aria-labelledby="t d">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 560 244" width="560" height="244" role="img" aria-labelledby="t d">
   <title id="t">plx</title>
-  <desc id="d">Multiple language dialects converging into a single plpgsql core.</desc>
+  <desc id="d">Multiple language dialects converging into a single plpgsql core, drawn as a mammoth.</desc>
 
-  <!-- dialect strands: Ruby, PHP, JavaScript, Python — merging into the core -->
-  <g fill="none" stroke-width="13" stroke-linecap="round">
-    <path d="M26,64  C74,64  74,120 112,120" stroke="#CC342D"/><!-- Ruby -->
-    <path d="M26,101 C74,101 82,120 112,120" stroke="#777BB3"/><!-- PHP -->
-    <path d="M26,139 C74,139 82,120 112,120" stroke="#F0DB4F"/><!-- JavaScript -->
-    <path d="M26,176 C74,176 74,120 112,120" stroke="#3776AB"/><!-- Python -->
+  <!-- dialect strands: Ruby, PHP, JavaScript, Python — feeding into the core -->
+  <g fill="none" stroke-width="12" stroke-linecap="round">
+    <path d="M8,80  C48,80  48,120 92,120" stroke="#CC342D"/><!-- Ruby -->
+    <path d="M8,104 C48,104 60,120 92,120" stroke="#777BB3"/><!-- PHP -->
+    <path d="M8,140 C48,140 60,120 92,120" stroke="#F0DB4F"/><!-- JavaScript -->
+    <path d="M8,164 C48,164 48,120 92,120" stroke="#3776AB"/><!-- Python -->
   </g>
 
   <!-- the plpgsql core the dialects transpile into -->
-  <rect x="112" y="72" width="96" height="96" rx="22" fill="#336791"/>
-  <g fill="#ffffff">
-    <rect x="132" y="100" width="60" height="10" rx="5"/>
-    <rect x="132" y="120" width="48" height="10" rx="5"/>
-    <rect x="132" y="140" width="36" height="10" rx="5"/>
+  <rect x="92" y="44" width="152" height="152" rx="34" fill="#336791"/>
+
+  <!-- mammoth, centered inside the core -->
+  <g transform="translate(168 120) scale(0.80) translate(-128 -123)">
+    <g fill="#ffffff">
+      <path d="M74,112
+               C68,84 96,66 120,80
+               C138,70 162,74 182,96
+               C196,110 197,128 186,142
+               C180,150 170,152 160,152
+               L98,152
+               C84,152 76,134 74,112 Z"/>
+      <circle cx="88" cy="100" r="26"/>
+      <rect x="96" y="150" width="15" height="30" rx="7.5"/>
+      <rect x="118" y="151" width="15" height="30" rx="7.5"/>
+      <rect x="150" y="150" width="15" height="30" rx="7.5"/>
+      <rect x="172" y="149" width="15" height="30" rx="7.5"/>
+      <path d="M74,114
+               C62,126 61,150 70,163
+               C74,170 83,169 84,160
+               C78,150 80,134 92,126 Z"/>
+    </g>
+    <path d="M92,128
+             C74,132 60,146 62,160
+             C64,150 74,142 90,142
+             C98,140 99,131 92,128 Z" fill="#ece0c8"/>
+    <circle cx="86" cy="96" r="4" fill="#336791"/>
   </g>
 
-  <!-- wordmark: plx -->
+  <!-- wordmark: plx, centered on the same axis -->
   <g fill="#336791">
-    <rect x="250" y="64" width="26" height="150" rx="13"/>
-    <path fill-rule="evenodd" d="M320,65 a52,52 0 1 0 0.1,0 Z M320,91 a26,26 0 1 1 -0.1,0 Z"/>
-    <rect x="372" y="44" width="26" height="126" rx="13"/>
+    <rect x="290" y="74" width="24" height="140" rx="12"/>
+    <path fill-rule="evenodd" d="M352,74 a46,46 0 1 0 0.1,0 Z M352,98 a22,22 0 1 1 -0.1,0 Z"/>
+    <rect x="396" y="54" width="24" height="112" rx="12"/>
   </g>
-  <g stroke="#336791" stroke-width="26" stroke-linecap="round">
-    <line x1="420" y1="66" x2="494" y2="168"/>
-    <line x1="494" y1="66" x2="420" y2="168"/>
+  <g stroke="#336791" stroke-width="24" stroke-linecap="round">
+    <line x1="438" y1="76" x2="508" y2="164"/>
+    <line x1="508" y1="76" x2="438" y2="164"/>
   </g>
 </svg>
