@@ -18,16 +18,17 @@
     <g fill="#ffffff">
       <path d="M74,112
                C68,84 96,66 120,80
-               C138,70 162,74 182,96
-               C196,110 197,128 186,142
-               C180,150 170,152 160,152
-               L98,152
-               C84,152 76,134 74,112 Z"/>
+               C140,70 164,74 184,98
+               C196,112 196,132 184,146
+               C182,149 180,150 176,150
+               L96,150
+               C86,150 76,134 74,112 Z"/>
       <circle cx="88" cy="100" r="26"/>
-      <rect x="96" y="150" width="15" height="30" rx="7.5"/>
-      <rect x="118" y="151" width="15" height="30" rx="7.5"/>
-      <rect x="150" y="150" width="15" height="30" rx="7.5"/>
-      <rect x="172" y="149" width="15" height="30" rx="7.5"/>
+      <!-- legs: tops lifted ~7px into the belly (y=150) so they merge cleanly -->
+      <rect x="100" y="143" width="15" height="36" rx="7.5"/>
+      <rect x="121" y="143" width="15" height="36" rx="7.5"/>
+      <rect x="145" y="143" width="15" height="36" rx="7.5"/>
+      <rect x="166" y="143" width="15" height="36" rx="7.5"/>
       <path d="M74,114
                C62,126 61,150 70,163
                C74,170 83,169 84,160
