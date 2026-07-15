@@ -239,6 +239,73 @@ return s
 $x$;""", "SELECT b_call_xpy(%d)" % CALL_N, None),
 })
 
+# ---- plxcobol ----
+add("plxcobol", None, {
+ "arith": ("""CREATE FUNCTION b_arith_xcob(n bigint) RETURNS bigint LANGUAGE plxcobol AS $x$
+WORKING-STORAGE SECTION.
+01 WS-S PIC 9(18) VALUE 0.
+01 WS-I PIC 9(18).
+PROCEDURE DIVISION.
+    PERFORM VARYING WS-I FROM 1 BY 1 UNTIL WS-I > N
+        ADD WS-I TO WS-S
+    END-PERFORM
+    GOBACK RETURNING WS-S.
+$x$;""", "SELECT b_arith_xcob(%d)" % ARITH_N, None),
+ "strbuild": ("""CREATE FUNCTION b_str_xcob(n int) RETURNS int LANGUAGE plxcobol AS $x$
+WORKING-STORAGE SECTION.
+01 WS-S PIC X(1) VALUE "".
+01 WS-I PIC 9(9).
+PROCEDURE DIVISION.
+    PERFORM VARYING WS-I FROM 1 BY 1 UNTIL WS-I > N
+        STRING-APPEND "x" TO WS-S
+    END-PERFORM
+    GOBACK RETURNING length(WS-S).
+$x$;""", "SELECT b_str_xcob(%d)" % STR_N, str(STR_N)),
+ "iter": ("""CREATE FUNCTION b_iter_xcob() RETURNS bigint LANGUAGE plxcobol AS $x$
+WORKING-STORAGE SECTION.
+01 WS-S PIC 9(18) VALUE 0.
+01 WS-R TYPE RECORD.
+PROCEDURE DIVISION.
+    PERFORM WS-R OVER "SELECT v FROM bench_data"
+        ADD WS-R.V TO WS-S
+    END-PERFORM
+    GOBACK RETURNING WS-S.
+$x$;""", "SELECT b_iter_xcob()", None),
+ "branch": ("""CREATE FUNCTION b_branch_xcob(n int) RETURNS bigint LANGUAGE plxcobol AS $x$
+WORKING-STORAGE SECTION.
+01 WS-S PIC 9(18) VALUE 0.
+01 WS-I PIC 9(9).
+PROCEDURE DIVISION.
+    PERFORM VARYING WS-I FROM 1 BY 1 UNTIL WS-I > N
+        EVALUATE WS-I % 4
+            WHEN 0
+                ADD 3 TO WS-S
+            WHEN 1
+                ADD 1 TO WS-S
+            WHEN 2
+                ADD 2 TO WS-S
+            WHEN OTHER
+                ADD 4 TO WS-S
+        END-EVALUATE
+    END-PERFORM
+    GOBACK RETURNING WS-S.
+$x$;""", "SELECT b_branch_xcob(%d)" % BRANCH_N, None),
+ "call": ("""CREATE FUNCTION b_leaf_xcob(x int) RETURNS int LANGUAGE plxcobol AS $x$
+PROCEDURE DIVISION.
+    GOBACK RETURNING X + 1.
+$x$;
+CREATE FUNCTION b_call_xcob(n int) RETURNS bigint LANGUAGE plxcobol AS $x$
+WORKING-STORAGE SECTION.
+01 WS-S PIC 9(18) VALUE 0.
+01 WS-I PIC 9(9).
+PROCEDURE DIVISION.
+    PERFORM VARYING WS-I FROM 1 BY 1 UNTIL WS-I > N
+        COMPUTE WS-S = WS-S + b_leaf_xcob(WS-I)
+    END-PERFORM
+    GOBACK RETURNING WS-S.
+$x$;""", "SELECT b_call_xcob(%d)" % CALL_N, None),
+})
+
 # ---- native plperl ----
 add("plperl", "plperl", {
  "arith": ("""CREATE FUNCTION b_arith_pl(n bigint) RETURNS bigint LANGUAGE plperl AS $x$

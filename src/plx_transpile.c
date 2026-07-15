@@ -4553,7 +4553,7 @@ cob_lex(Cb *cb, const char *body)
 			continue;
 		}
 		if (*p == '+' || *p == '-' || *p == '*' || *p == '/' || *p == '=' ||
-			*p == '<' || *p == '>' || *p == ':')
+			*p == '<' || *p == '>' || *p == ':' || *p == '%')
 		{
 			CBPUSH(CB_OP, p, 1);
 			p++;
@@ -4577,7 +4577,8 @@ cob_is_verb(CbTok *tk)
 		"EVALUATE", "PERFORM", "DISPLAY", "RAISE", "ASSERT", "GOBACK", "RETURN",
 		"CONTINUE", "EXIT", "CALL", "EXECUTE", "COMMIT", "ROLLBACK",
 		"RETURN-NEXT", "RETURN-QUERY", "GET", "BEGIN-TRY",
-		"OPEN-CURSOR", "FETCH-CURSOR", "CLOSE-CURSOR", "MOVE-CURSOR", NULL
+		"OPEN-CURSOR", "FETCH-CURSOR", "CLOSE-CURSOR", "MOVE-CURSOR",
+		"STRING-APPEND", NULL
 	};
 	int			i;
 
@@ -5477,6 +5478,46 @@ cob_perform(Cb *cb, int ind)
 		initStringInfo(&by);
 		cob_value(cb, &by, s_until, 1);
 		cob_expect(cb, "UNTIL");
+
+		/*
+		 * Fast path: PERFORM VARYING v FROM a BY 1 UNTIL v > b (or >= b) is an
+		 * integer FOR loop, which plpgsql runs faster than a WHILE with a manual
+		 * increment. Requires BY 1 and a condition "<var> > b" / "<var> >= b".
+		 */
+		{
+			char	   *bytrim = by.data;
+			CbTok	   *c0 = cob_cur(cb);
+			CbTok	   *c1 = &cb->t[cb->pos + 1];
+			bool		gt = (c1->kind == CB_OP && c1->len == 1 && c1->s[0] == '>');
+			bool		ge = (c1->kind == CB_OP && c1->len == 2 &&
+							  c1->s[0] == '>' && c1->s[1] == '=');
+
+			while (*bytrim == ' ')
+				bytrim++;
+			if (strcmp(bytrim, "1") == 0 && c0->kind == CB_WORD && (gt || ge) &&
+				strcmp(cob_map(c0->s, c0->len), var) == 0)
+			{
+				StringInfoData bound;
+
+				cb->pos += 2;			/* control variable and the operator */
+				initStringInfo(&bound);
+				cob_value(cb, &bound, NULL, 0);
+				indent(&cb->cx->out, ind);
+				if (gt)
+					appendStringInfo(&cb->cx->out, "FOR %s IN (%s )..(%s ) LOOP\n",
+									 var, from.data, bound.data);
+				else
+					appendStringInfo(&cb->cx->out, "FOR %s IN (%s )..((%s ) - 1) LOOP\n",
+									 var, from.data, bound.data);
+				cob_block(cb, ind + 1);
+				cob_expect(cb, "END-PERFORM");
+				indent(&cb->cx->out, ind);
+				appendStringInfoString(&cb->cx->out, "END LOOP;\n");
+				return;
+			}
+		}
+
+		/* general PERFORM VARYING -> WHILE with a manual step */
 		initStringInfo(&c);
 		cob_value(cb, &c, NULL, 0);
 		indent(&cb->cx->out, ind);
@@ -6110,6 +6151,34 @@ cob_move_cursor(Cb *cb, int ind)
 	appendStringInfo(&cb->cx->out, "MOVE FORWARD %s FROM %s;\n", n ? n : "1", c);
 }
 
+/* STRING-APPEND <expr> TO <var>: lower to the plx_strbuild string builder
+ * (amortized-O(1) append), the COBOL counterpart of the other dialects'
+ * append operators. */
+static void
+cob_string_append(Cb *cb, int ind)
+{
+	StringInfoData v;
+	char	   *tgt;
+	PlxLocal2  *l;
+	static const char *stops[] = {"TO"};
+
+	cb->pos++;								/* STRING-APPEND */
+	initStringInfo(&v);
+	if (!cob_value(cb, &v, stops, 1))
+		cob_err(cb, "STRING-APPEND requires a value");
+	cob_expect(cb, "TO");
+	if (cob_cur(cb)->kind != CB_WORD)
+		cob_err(cb, "STRING-APPEND requires a receiving field");
+	tgt = cob_map(cob_cur(cb)->s, cob_cur(cb)->len);
+	cb->pos++;
+	l = local_find(cb->cx, tgt, strlen(tgt));
+	if (l && !l->is_record)
+		l->typ = pstrdup("plx_strbuild");	/* the accumulator becomes a builder */
+	indent(&cb->cx->out, ind);
+	appendStringInfo(&cb->cx->out, "%s := plx_sb_append(%s, (%s )::text);\n",
+					 tgt, tgt, v.data);
+}
+
 static void
 cob_stmt(Cb *cb, int ind)
 {
@@ -6117,6 +6186,8 @@ cob_stmt(Cb *cb, int ind)
 
 	if (cob_ci(tk, "MOVE"))
 		cob_move(cb, ind);
+	else if (cob_ci(tk, "STRING-APPEND"))
+		cob_string_append(cb, ind);
 	else if (cob_ci(tk, "RETURN-NEXT"))
 		cob_return_next(cb, ind);
 	else if (cob_ci(tk, "RETURN-QUERY"))

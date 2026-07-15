@@ -154,6 +154,25 @@ SELECT cob_area(2);
  12.56636
 (1 row)
 
+-- STRING-APPEND lowers to the plx_strbuild string builder; % is modulo
+CREATE FUNCTION cob_build(n int) RETURNS text LANGUAGE plxcobol AS $$
+WORKING-STORAGE SECTION.
+01 WS-S PIC X(1) VALUE "".
+01 WS-I PIC 9(9).
+PROCEDURE DIVISION.
+    PERFORM VARYING WS-I FROM 1 BY 1 UNTIL WS-I > N
+        IF WS-I % 2 = 0
+            STRING-APPEND "ab" TO WS-S
+        END-IF
+    END-PERFORM
+    GOBACK RETURNING WS-S.
+$$;
+SELECT cob_build(6);
+ cob_build 
+-----------
+ ababab
+(1 row)
+
 -- data set-up for the SQL constructs
 CREATE TEMP TABLE cob_items(id int, amount int);
 INSERT INTO cob_items VALUES (1, 10), (2, 20), (3, 30);

@@ -4,6 +4,23 @@ All notable changes to plx are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and plx uses the extension
 version in `plx.control` (currently `1.0`).
 
+## [Unreleased]
+
+### Added
+
+- plxcobol: `STRING-APPEND <expr> TO <var>`, which lowers to the `plx_strbuild`
+  string builder (the COBOL counterpart of the other dialects' append operators),
+  and `%` as the modulo operator in expressions.
+
+### Changed
+
+- plxcobol: a `PERFORM VARYING v FROM a BY 1 UNTIL v > b` (or `>= b`) counting
+  loop now lowers to a plpgsql integer `FOR` loop instead of a `WHILE` with a
+  manual step, which is faster; other `PERFORM VARYING` forms still use `WHILE`.
+- Benchmarks now cover plxcobol (`bench/BENCHMARKS.md`): it matches plpgsql on
+  arith, strbuild, iter, and call, and is about 1.3x on the branch workload
+  because `EVALUATE` lowers to `CASE`.
+
 ## [1.1] - 2026-07-14
 
 ### Added

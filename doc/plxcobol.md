@@ -237,6 +237,27 @@ CALL "my_proc" USING WS-A WS-B
 
 `COMMIT` and `ROLLBACK` are available in a procedure context.
 
+### Building strings in a loop
+
+Concatenating onto a string in a loop is slow in plpgsql (O(n^2), because text is
+immutable and each step copies the whole string). `STRING-APPEND <expr> TO <var>`
+lowers to the plx string builder (`plx_strbuild`), whose append is amortized
+O(1):
+
+```sql
+01 WS-OUT PIC X(1) VALUE "".
+...
+PERFORM WS-ROW OVER "SELECT name FROM t ORDER BY id"
+    STRING-APPEND WS-ROW.NAME TO WS-OUT
+    STRING-APPEND "," TO WS-OUT
+END-PERFORM
+GOBACK RETURNING WS-OUT.
+```
+
+On PostgreSQL 18 this is amortized O(1) per append; on PostgreSQL 13 to 17 it is
+correct but not accelerated (the in-place optimization needs a PostgreSQL 18
+feature).
+
 ## Errors
 
 ### Raising
@@ -279,7 +300,8 @@ ASSERT N > 0
 - Concatenation and formatting: `DISPLAY` concatenates its operands.
 - Figurative constants: `ZERO` / `ZEROS` map to `0`, `SPACE` / `SPACES` to the
   empty string, `NULL` to SQL `NULL`.
-- Exponent: `**` maps to SQL `^`. The other arithmetic operators are as in SQL.
+- Arithmetic: `+`, `-`, `*`, `/` are as in SQL; `**` maps to SQL `^` (exponent)
+  and `%` is modulo. `COMPUTE` evaluates the expression as SQL.
 - Comparisons use SQL three-valued logic. Use `IS NULL` / `IS NOT NULL` to test
   for null.
 
