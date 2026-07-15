@@ -1,11 +1,12 @@
 # plx / plpgsql Feature Parity
 
 Target: every plpgsql capability is expressible in each plx dialect (plxruby,
-plxphp, plxjs, plxpython3). The reference is the plpgsql statement set in
-`src/pl/plpgsql/src/plpgsql.h` (`PLpgSQL_stmt_*`) plus its declaration forms.
+plxphp, plxjs, plxpython3, plxcobol). The reference is the plpgsql statement set
+in `src/pl/plpgsql/src/plpgsql.h` (`PLpgSQL_stmt_*`) plus its declaration forms.
 
-Legend: done / partial / todo. All four dialects track the same status unless
-noted.
+Legend: done / partial / todo. All dialects track the same status unless noted.
+The `dialect syntax` column shows the curly-brace and scripting dialects; the
+COBOL spellings are listed separately under "plxcobol" below.
 
 | plpgsql construct | plx status | dialect syntax |
 |---|---|---|
@@ -36,6 +37,38 @@ noted.
 | nested block with local `DECLARE` | by design | locals are function-scoped (matches Ruby method / JS var / PHP function scope); `begin/rescue` provides a nested BEGIN/EXCEPTION block sharing that scope |
 
 This file is updated as constructs land.
+
+## plxcobol
+
+plxcobol (ISO/IEC 1989:2023) reaches every row above. Because COBOL is
+verb-driven, the spellings differ:
+
+| plpgsql construct | plxcobol syntax |
+|---|---|
+| assignment | `MOVE e TO v`, `COMPUTE v = e`, `ADD`/`SUBTRACT`/`MULTIPLY`/`DIVIDE` |
+| `IF` / `ELSE` | `IF ... ELSE ... END-IF` |
+| `CASE` (simple + searched) | `EVALUATE ... END-EVALUATE`, `EVALUATE TRUE ...` |
+| `LOOP` / `WHILE` | `PERFORM ... END-PERFORM`, `PERFORM UNTIL c ...` |
+| `FOR` integer | `PERFORM VARYING v FROM a BY s UNTIL c`, `PERFORM n TIMES` |
+| `FOR` over query / dynamic | `PERFORM row OVER "sql" [USING ...]` |
+| `FOREACH` over array | `PERFORM v OVER ARRAY e` |
+| `EXIT` / `CONTINUE` | `EXIT PERFORM`, `EXIT PERFORM CYCLE`, `CONTINUE` (no-op) |
+| `RETURN` / `NEXT` / `QUERY` | `GOBACK RETURNING e`, `RETURN-NEXT e`, `RETURN-QUERY "sql"` |
+| `RAISE` | `RAISE <level> "msg" [SQLSTATE "code"]`, `DISPLAY` (notice) |
+| `ASSERT` | `ASSERT c` |
+| `EXECUTE` / `SELECT INTO` | `EXECUTE "sql" [USING ...] [INTO ...]` |
+| `GET DIAGNOSTICS` / `FOUND` | `GET ROW-COUNT INTO v`, `FOUND` |
+| `GET STACKED DIAGNOSTICS` | `GET MESSAGE`/`DETAIL`/`HINT`/`SQLSTATE`/`CONTEXT INTO v` |
+| exception handling | `BEGIN-TRY ... WHEN <cond>|OTHER ... END-TRY` |
+| cursors | `OPEN-CURSOR`, `FETCH-CURSOR`, `MOVE-CURSOR`, `CLOSE-CURSOR` |
+| `CALL` procedure | `CALL "proc" USING ...` |
+| `COMMIT` / `ROLLBACK` | `COMMIT`, `ROLLBACK` |
+| declarations: `CONSTANT` | `01 NAME CONSTANT AS lit` |
+| declarations: `%TYPE`/`%ROWTYPE` | `01 NAME TYPE tbl%ROWTYPE` |
+
+Loop labels have no COBOL equivalent and are not offered in plxcobol; the other
+dialects keep the `label:` extension. Types are declared from `PICTURE` clauses
+or a `TYPE` clause (see [plxcobol.md](plxcobol.md)).
 
 ## Notes
 

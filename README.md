@@ -4,7 +4,7 @@
 
 <p align="center">
   <b>Write PostgreSQL functions in the language you already know.</b><br>
-  Ruby, PHP, JavaScript, or Python syntax, compiled to plpgsql at
+  Ruby, PHP, JavaScript, Python, or COBOL syntax, compiled to plpgsql at
   <code>CREATE FUNCTION</code> time.
 </p>
 
@@ -13,7 +13,7 @@
 ## What plx is
 
 plx is a PostgreSQL extension that lets you write stored functions and triggers
-in a Ruby, PHP, JavaScript, or Python dialect. When you run `CREATE FUNCTION`,
+in a Ruby, PHP, JavaScript, Python, or COBOL dialect. When you run `CREATE FUNCTION`,
 plx transpiles the body to plpgsql and stores that plpgsql in `pg_proc.prosrc`.
 At run time the function is executed by PostgreSQL's own plpgsql interpreter.
 There is no separate language runtime loaded into the backend, and nothing new to
@@ -34,6 +34,7 @@ dialects available today are:
 - `plxphp`: a PHP dialect. See [doc/plxphp.md](doc/plxphp.md).
 - `plxjs`: a JavaScript dialect. See [doc/plxjs.md](doc/plxjs.md).
 - `plxpython3`: a Python dialect. See [doc/plxpython3.md](doc/plxpython3.md).
+- `plxcobol`: a COBOL dialect (ISO/IEC 1989:2023). See [doc/plxcobol.md](doc/plxcobol.md).
 
 Every plpgsql statement type is reachable from every dialect. See
 [doc/PARITY.md](doc/PARITY.md) for the construct matrix. The language names carry
@@ -181,9 +182,9 @@ CREATE EXTENSION plx;
 ## Documentation
 
 - Per-dialect chapters: [plxruby](doc/plxruby.md), [plxphp](doc/plxphp.md),
-  [plxjs](doc/plxjs.md), [plxpython3](doc/plxpython3.md). Each covers the full
-  syntax, supported constructs with examples, semantic differences, and what is
-  rejected.
+  [plxjs](doc/plxjs.md), [plxpython3](doc/plxpython3.md),
+  [plxcobol](doc/plxcobol.md). Each covers the full syntax, supported constructs
+  with examples, semantic differences, and what is rejected.
 - [doc/PARITY.md](doc/PARITY.md): the plpgsql construct parity matrix.
 - [doc/COMPATIBILITY.md](doc/COMPATIBILITY.md): supported PostgreSQL versions.
 - [doc/USERGUIDE.md](doc/USERGUIDE.md): examples from the PL/pgSQL manual shown in

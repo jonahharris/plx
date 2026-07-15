@@ -35,6 +35,7 @@ extern const PlxDialect plx_ruby_dialect;
 extern const PlxDialect plx_php_dialect;
 extern const PlxDialect plx_js_dialect;
 extern const PlxDialect plx_py_dialect;
+extern const PlxDialect plx_cobol_dialect;
 
 /* ---- dialect registry ------------------------------------------------- */
 
@@ -201,4 +202,5 @@ _PG_init(void)
 	plx_register_dialect(&plx_php_dialect);
 	plx_register_dialect(&plx_js_dialect);
 	plx_register_dialect(&plx_py_dialect);
+	plx_register_dialect(&plx_cobol_dialect);
 }

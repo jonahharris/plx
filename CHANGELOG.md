@@ -4,6 +4,24 @@ All notable changes to plx are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and plx uses the extension
 version in `plx.control` (currently `1.0`).
 
+## [Unreleased]
+
+### Added
+
+- `plxcobol`, a COBOL dialect (ISO/IEC 1989:2023, COBOL 2023, free format), at
+  full plpgsql construct parity. It has its own front end (verb-driven tokenizer
+  and parser): `WORKING-STORAGE` declarations with `PICTURE`/`TYPE`/`CONSTANT`
+  mapped to SQL types; `MOVE`/`COMPUTE` and the `ADD`/`SUBTRACT`/`MULTIPLY`/
+  `DIVIDE` verbs; `IF`/`END-IF`; `EVALUATE` (simple and `EVALUATE TRUE`);
+  `PERFORM` in the `UNTIL`, `VARYING`, `TIMES`, inline, query (`OVER`), and array
+  (`OVER ARRAY`) forms; `GOBACK RETURNING`, `RETURN-NEXT`, `RETURN-QUERY`;
+  `EXECUTE`; cursors (`OPEN-CURSOR`/`FETCH-CURSOR`/`MOVE-CURSOR`/`CLOSE-CURSOR`);
+  exception handling (`BEGIN-TRY`/`WHEN`/`END-TRY`) with stacked diagnostics via
+  `GET`; `RAISE`, `DISPLAY`, `ASSERT`, `CALL`, `COMMIT`/`ROLLBACK`. Data names
+  are mapped to plpgsql identifiers (lower-cased, hyphens to underscores).
+  See [doc/plxcobol.md](doc/plxcobol.md).
+- Regression suite `plxcobol` added to `make installcheck`.
+
 ## [1.0] - 2026-07-14
 
 Initial release.
