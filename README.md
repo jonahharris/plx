@@ -12,6 +12,10 @@
   <a href="https://github.com/commandprompt/plx/actions/workflows/ci.yml"><img src="https://github.com/commandprompt/plx/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
 </p>
 
+<p align="center">
+  <b><a href="https://commandprompt.github.io/plx/">Documentation site</a></b>
+</p>
+
 ---
 
 ## What plx is
