@@ -47,3 +47,45 @@ SELECT sb6();
 -- implicitly usable where text is expected: function calls and comparison
 SELECT upper('ab'::plx_strbuild) AS as_text_fn,
        ('ab'::plx_strbuild = 'ab') AS compares_equal;
+
+-- loop string-accumulation is lowered to the builder in every dialect
+CREATE FUNCTION acc_rb(n int) RETURNS text LANGUAGE plxruby AS $$
+s = "" #:: text
+for i in 1..n
+  s << i.to_s
+end
+return s
+$$;
+SELECT acc_rb(5);
+-- the lowered plpgsql uses plx_strbuild + plx_sb_append
+SELECT regexp_replace(prosrc, '/\*plx-orig:[^*]*\*/\s*', '', 'g') FROM pg_proc WHERE proname = 'acc_rb';
+
+CREATE FUNCTION acc_php(n int) RETURNS text LANGUAGE plxphp AS $$
+$s = "" /*:: text */;
+for ($i = 1; $i <= $n; $i++) { $s .= $i; }
+return $s;
+$$;
+SELECT acc_php(5);
+
+CREATE FUNCTION acc_js(n int) RETURNS text LANGUAGE plxjs AS $$
+let s = "" /*:: text */;
+for (let i = 1; i <= n; i++) { s += i; }
+return s;
+$$;
+SELECT acc_js(5);
+
+CREATE FUNCTION acc_py(n int) RETURNS text LANGUAGE plxpython3 AS $$
+s = "" #:: text
+for i in range(1, n + 1):
+    s += str(i)
+return s
+$$;
+SELECT acc_py(5);
+
+-- a numeric += is left as numeric addition, not string append
+CREATE FUNCTION acc_num(n int) RETURNS int LANGUAGE plxjs AS $$
+let t = 0;
+for (let i = 1; i <= n; i++) { t += i; }
+return t;
+$$;
+SELECT acc_num(5);

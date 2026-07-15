@@ -586,6 +586,17 @@ name_eq(Tok *tk, const char *w)
 	return tk->len == l && strncmp(tk->s, w, l) == 0;
 }
 
+/* is a declared type text-like (so string append applies)? */
+static bool
+is_stringy(const char *typ)
+{
+	if (!typ)
+		return false;
+	return (strcasestr(typ, "text") != NULL ||
+			strcasestr(typ, "char") != NULL ||
+			strcasestr(typ, "plx_strbuild") != NULL);
+}
+
 static void
 skip_seps(Ctx *cx)
 {
@@ -1090,6 +1101,37 @@ rewrite_expr_inner(Ctx *cx, const char *s, int len, bool boolctx)
 			while (j < len && is_ident(s[j]))
 				j++;
 			wl = j - i;
+
+			/* Python conversions: str(x)/int(x)/float(x) -> (x)::type */
+			if (surf->fstrings && j < len && s[j] == '(' &&
+				((wl == 3 && strncmp(s + i, "str", 3) == 0) ||
+				 (wl == 3 && strncmp(s + i, "int", 3) == 0) ||
+				 (wl == 5 && strncmp(s + i, "float", 5) == 0)))
+			{
+				const char *cast = (s[i] == 's') ? "text" :
+					(s[i] == 'i') ? "integer" : "double precision";
+				int			depth = 1,
+							k = j + 1,
+							argstart = j + 1;
+				char	   *inner;
+
+				while (k < len && depth > 0)
+				{
+					if (s[k] == '(')
+						depth++;
+					else if (s[k] == ')')
+					{
+						depth--;
+						if (!depth)
+							break;
+					}
+					k++;
+				}
+				inner = rewrite_expr(cx, s + argstart, k - argstart, false);
+				appendStringInfo(&out, "(%s)::%s", inner, cast);
+				i = (k < len) ? k + 1 : k;
+				continue;
+			}
 
 			/* exception accessor via "." (Ruby) or "->" (PHP):
 			 * e.message / $e->message -> SQLERRM ; .sqlstate/.code -> SQLSTATE */
@@ -2087,6 +2129,52 @@ emit_core(Ctx *cx, int a, int b, int ind, bool toplevel)
 		l->typ = pnstrdup(cx->t[a + 1].ann, cx->t[a + 1].annlen);
 		return;
 	}
+	/*
+	 * String-accumulation append operators lower to the string builder:
+	 *   Ruby  s << x     (when s is a string)
+	 *   PHP   $s .= x
+	 *   JS/Py s += x     (when s is a string)
+	 * become  s := plx_sb_append(s, (x));  with s declared plx_strbuild, whose
+	 * append is amortized O(1). A numeric += is left alone.
+	 */
+	if (t0->kind == T_IDENT && !is_param(cx, t0->s, t0->len))
+	{
+		int			app_rhs = -1;
+		PlxLocal2  *l = local_find(cx, t0->s, t0->len);
+
+		if (a + 1 < b && tok_is(&cx->t[a + 1], "<<") && l && is_stringy(l->typ))
+			app_rhs = a + 2;	/* Ruby shovel on a string */
+		else if (a + 2 < b && cx->t[a + 1].kind == T_DOT && tok_is(&cx->t[a + 2], "="))
+			app_rhs = a + 3;	/* PHP .= */
+		else if (a + 1 < b && tok_is(&cx->t[a + 1], "+=") && l && is_stringy(l->typ))
+			app_rhs = a + 2;	/* += on a string */
+
+		if (app_rhs >= 0)
+		{
+			int			rb = b;
+			char	   *rhs,
+					   *r;
+
+			/* drop a trailing annotation token if present */
+			if (rb > app_rhs && cx->t[rb - 1].kind == T_TYPEANN)
+				rb--;
+			if (app_rhs >= rb)
+				plx_err(cx, t0->line, "append requires a value on the right-hand side");
+			if (!l)
+				l = local_add(cx, t0->s, t0->len);
+			if (l->is_const)
+				plx_err(cx, t0->line, "cannot append to a constant");
+			l->typ = pstrdup("plx_strbuild");
+			rhs = span_text(cx, app_rhs, rb);
+			r = rewrite_expr(cx, rhs, (int) strlen(rhs), false);
+			indent(o, ind);
+			/* cast the appended value to text (int, numeric, etc. render) */
+			appendStringInfo(o, "%.*s := plx_sb_append(%.*s, (%s)::text);\n",
+							 t0->len, t0->s, t0->len, t0->s, r);
+			return;
+		}
+	}
+
 	/* assignment:  IDENT (= | += | -= | *= | /= | %=) RHS [#:: T] */
 	if (t0->kind == T_IDENT && a + 1 < b && cx->t[a + 1].kind == T_OP)
 	{
@@ -4200,17 +4288,17 @@ parse_py_stmt(Ctx *cx, int ind, bool toplevel)
 				 !(cx->t[a + 1].kind == T_LPAREN))
 		{
 			/* Python statement form: assert cond[, msg] */
-			int			i, depth = 0, comma = -1;
+			int			ai, adepth = 0, comma = -1;
 
-			for (i = a + 1; i < b; i++)
+			for (ai = a + 1; ai < b; ai++)
 			{
-				if (cx->t[i].kind == T_LPAREN || cx->t[i].kind == T_LBRACKET)
-					depth++;
-				else if (cx->t[i].kind == T_RPAREN || cx->t[i].kind == T_RBRACKET)
-					depth--;
-				else if (depth == 0 && cx->t[i].kind == T_COMMA)
+				if (cx->t[ai].kind == T_LPAREN || cx->t[ai].kind == T_LBRACKET)
+					adepth++;
+				else if (cx->t[ai].kind == T_RPAREN || cx->t[ai].kind == T_RBRACKET)
+					adepth--;
+				else if (adepth == 0 && cx->t[ai].kind == T_COMMA)
 				{
-					comma = i;
+					comma = ai;
 					break;
 				}
 			}
