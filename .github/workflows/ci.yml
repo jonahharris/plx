@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  regress:
+    name: PostgreSQL ${{ matrix.pg }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        pg: [13, 14, 15, 16, 17, 18]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install PostgreSQL ${{ matrix.pg }} (PGDG)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql-common
+          sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
+          sudo apt-get install -y \
+            postgresql-${{ matrix.pg }} \
+            postgresql-server-dev-${{ matrix.pg }}
+          echo "PG_CONFIG=/usr/lib/postgresql/${{ matrix.pg }}/bin/pg_config" >> "$GITHUB_ENV"
+
+      - name: Build and install plx
+        run: |
+          make PG_CONFIG="$PG_CONFIG"
+          sudo make install PG_CONFIG="$PG_CONFIG"
+
+      - name: Start the server and prepare a superuser role
+        run: |
+          sudo pg_ctlcluster ${{ matrix.pg }} main start
+          # the target cluster's port (the runner may have another cluster too)
+          port=$(pg_lsclusters -h | awk '$1=="${{ matrix.pg }}" && $2=="main"{print $3}')
+          sudo -u postgres createuser --superuser --port "$port" "$USER"
+          echo "PGHOST=/var/run/postgresql" >> "$GITHUB_ENV"
+          echo "PGPORT=$port" >> "$GITHUB_ENV"
+
+      - name: Run the regression suite
+        run: make installcheck PG_CONFIG="$PG_CONFIG"
+
+      - name: Show diffs on failure
+        if: failure()
+        run: |
+          cat test/regression.diffs || true
+          sudo cat /var/log/postgresql/postgresql-${{ matrix.pg }}-main.log || true

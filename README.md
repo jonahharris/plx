@@ -8,6 +8,10 @@
   <code>CREATE FUNCTION</code> time.
 </p>
 
+<p align="center">
+  <a href="https://github.com/commandprompt/plx/actions/workflows/ci.yml"><img src="https://github.com/commandprompt/plx/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+</p>
+
 ---
 
 ## What plx is
