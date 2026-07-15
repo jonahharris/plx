@@ -4,6 +4,35 @@ All notable changes to plx are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and plx uses the extension
 version in `plx.control` (currently `1.0`).
 
+## [1.1.1] - 2026-07-15
+
+Code-only patch release (no catalog changes). Upgrade with
+`ALTER EXTENSION plx UPDATE TO '1.1.1'` after installing the new module.
+
+### Fixed
+
+- Compilation on PostgreSQL 13, 14, and 15: `plx_strbuild.c` included `varatt.h`
+  unconditionally, but that header was only split out of `postgres.h` in
+  PostgreSQL 16, so plx 1.1 did not build on 13-15. Guard the include. The full
+  regression suite now passes on PostgreSQL 13 through 18 (verified in CI).
+- plxcobol: a crash (out-of-bounds read) on a body truncated at
+  `PERFORM VARYING ... UNTIL`; it now errors cleanly.
+- plxcobol: `ADD a b GIVING c` and other multi-addend `ADD`/`SUBTRACT` forms were
+  rejected; parse an operand list. `MULTIPLY`/`DIVIDE` remain single-source.
+- plxcobol: multi-argument SQL function calls in expressions (`mod(a, b)`) were
+  broken because the tokenizer stripped commas everywhere; keep commas inside
+  parentheses.
+- plxcobol: a `GREATER/LESS ... OR EQUAL` comparison at the end of a condition
+  dropped the "OR EQUAL"; a `PICTURE` repeat-count integer overflow; and an
+  unterminated string literal silently lost its last character.
+
+### Added
+
+- Continuous integration (GitHub Actions) running the full 9-suite regression on
+  a PostgreSQL 13 through 18 matrix.
+- plxcobol coverage in the fuzzer and the corpus runner, and plxcobol rejection
+  tests in the error suite.
+
 ## [1.1] - 2026-07-14
 
 ### Added
@@ -79,5 +108,6 @@ Initial release.
 - Tested against PostgreSQL 13, 14, 15, 16, 17, and 18. The full regression suite
   passes on each.
 
+[1.1.1]: https://github.com/commandprompt/plx/releases/tag/v1.1.1
 [1.1]: https://github.com/commandprompt/plx/releases/tag/v1.1
 [1.0]: https://github.com/commandprompt/plx/releases/tag/v1.0
