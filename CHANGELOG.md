@@ -4,7 +4,7 @@ All notable changes to plx are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/), and plx uses the extension
 version in `plx.control` (currently `1.0`).
 
-## [Unreleased]
+## [1.1] - 2026-07-14
 
 ### Added
 
@@ -21,6 +21,11 @@ version in `plx.control` (currently `1.0`).
   are mapped to plpgsql identifiers (lower-cased, hyphens to underscores).
   See [doc/plxcobol.md](doc/plxcobol.md).
 - Regression suite `plxcobol` added to `make installcheck`.
+
+### Upgrading
+
+- Existing 1.0 installations upgrade in place with
+  `ALTER EXTENSION plx UPDATE TO '1.1'` (see `plx--1.0--1.1.sql`).
 
 ## [1.0] - 2026-07-14
 
@@ -66,4 +71,5 @@ Initial release.
 - Tested against PostgreSQL 13, 14, 15, 16, 17, and 18. The full regression suite
   passes on each.
 
+[1.1]: https://github.com/commandprompt/plx/releases/tag/v1.1
 [1.0]: https://github.com/commandprompt/plx/releases/tag/v1.0
