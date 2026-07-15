@@ -44,10 +44,12 @@
   <g fill="#336791">
     <rect x="290" y="74" width="24" height="140" rx="12"/>
     <path fill-rule="evenodd" d="M352,74 a46,46 0 1 0 0.1,0 Z M352,98 a22,22 0 1 1 -0.1,0 Z"/>
-    <rect x="396" y="54" width="24" height="112" rx="12"/>
+    <rect x="414" y="54" width="24" height="112" rx="12"/>
   </g>
+  <!-- x: endpoints pulled in by the 12px cap radius so the round caps land on
+       the x-height (74) and baseline (166), aligning with l and p -->
   <g stroke="#336791" stroke-width="24" stroke-linecap="round">
-    <line x1="438" y1="76" x2="508" y2="164"/>
-    <line x1="508" y1="76" x2="438" y2="164"/>
+    <line x1="466" y1="86" x2="528" y2="154"/>
+    <line x1="528" y1="86" x2="466" y2="154"/>
   </g>
 </svg>
